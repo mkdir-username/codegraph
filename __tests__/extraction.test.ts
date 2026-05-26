@@ -416,6 +416,21 @@ export const config = {
     expect(varNode?.isExported).toBe(true);
   });
 
+  it('should extract method-shorthand functions from exported object literals', () => {
+    const code = `
+export const R = {
+  if(condition: boolean) { return condition; },
+  text(value: string) { return value; },
+  container() { return {}; },
+};
+`;
+    const result = extractFromSource('dsl.ts', code);
+    const funcNames = result.nodes.filter((n) => n.kind === 'function').map((n) => n.name);
+    expect(funcNames).toContain('if');
+    expect(funcNames).toContain('text');
+    expect(funcNames).toContain('container');
+  });
+
   it('should extract exported const with array literal', () => {
     const code = `
 export const SCREEN_NAMES = ['home', 'settings', 'profile'] as const;

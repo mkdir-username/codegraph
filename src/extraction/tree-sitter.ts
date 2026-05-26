@@ -1096,12 +1096,19 @@ export class TreeSitterExtractor {
             if (isExported && valueNode &&
                 (valueNode.type === 'object' || valueNode.type === 'object_expression')) {
               for (let j = 0; j < valueNode.namedChildCount; j++) {
-                const pair = valueNode.namedChild(j);
-                if (pair?.type !== 'pair') continue;
-                const v = getChildByField(pair, 'value');
-                const k = getChildByField(pair, 'key');
-                if (k && v && (v.type === 'arrow_function' || v.type === 'function_expression')) {
-                  this.extractFunction(v, getNodeText(k, this.source).replace(/^['"`]|['"`]$/g, ''));
+                const member = valueNode.namedChild(j);
+                if (!member) continue;
+                if (member.type === 'pair') {
+                  const v = getChildByField(member, 'value');
+                  const k = getChildByField(member, 'key');
+                  if (k && v && (v.type === 'arrow_function' || v.type === 'function_expression')) {
+                    this.extractFunction(v, getNodeText(k, this.source).replace(/^['"`]|['"`]$/g, ''));
+                  }
+                } else if (member.type === 'method_definition') {
+                  const methodName = extractName(member, this.source, this.extractor);
+                  if (methodName) {
+                    this.extractFunction(member, methodName);
+                  }
                 }
               }
             }
