@@ -39,7 +39,7 @@ export const sduiResolver: FrameworkResolver = {
     const calls = extractCreateRefCalls(content);
     if (calls.length === 0) return { nodes, references };
 
-    const fileNodeId = `file:${filePath}:file:${filePath.split('/').pop()}:1`;
+    const fileNodeId = `file:${filePath}`;
     const lang = filePath.endsWith('.tsx') ? 'tsx' as const : 'typescript' as const;
     for (const { arg, line } of calls) {
       references.push({
@@ -59,18 +59,21 @@ export const sduiResolver: FrameworkResolver = {
     if (!ref.referenceName.startsWith(SDUI_REF_PREFIX)) return null;
     const arg = ref.referenceName.slice(SDUI_REF_PREFIX.length);
     const dir = ref.filePath.replace(/\/[^/]+$/, '');
-    const sibling = dir + '/' + arg + '.ts';
+    const parentDir = dir.replace(/\/[^/]+$/, '');
 
-    if (context.fileExists(sibling)) {
-      const nodes = context.getNodesInFile(sibling);
-      const fileNode = nodes.find((n) => n.kind === 'file');
-      if (fileNode) {
-        return {
-          original: ref,
-          targetNodeId: fileNode.id,
-          confidence: 0.75,
-          resolvedBy: 'framework',
-        };
+    for (const base of [dir, parentDir]) {
+      const candidate = base + '/' + arg + '.ts';
+      if (context.fileExists(candidate)) {
+        const nodes = context.getNodesInFile(candidate);
+        const fileNode = nodes.find((n) => n.kind === 'file');
+        if (fileNode) {
+          return {
+            original: ref,
+            targetNodeId: fileNode.id,
+            confidence: base === dir ? 0.80 : 0.70,
+            resolvedBy: 'framework',
+          };
+        }
       }
     }
     return null;
