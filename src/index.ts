@@ -406,6 +406,11 @@ export class CodeGraph {
       try {
         const result = await this.orchestrator.sync(options.onProgress);
 
+        // Re-detect frameworks when new files appear (e.g. SDUI screens added post-init)
+        if (result.filesAdded > 0) {
+          this.reinitializeResolver();
+        }
+
         // Resolve references if files were updated
         if (result.filesAdded > 0 || result.filesModified > 0) {
           if (result.changedFilePaths) {

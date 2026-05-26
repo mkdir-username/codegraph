@@ -21,6 +21,21 @@ describe('SDUI Framework Resolver', () => {
       expect(sduiResolver.detect(context)).toBe(true);
     });
 
+    it('detects SDUI project by createCtx in store (no createRef)', () => {
+      const context = {
+        getAllFiles: () => ['src/screens/main/store.ts', 'src/core/index.ts'],
+        readFile: (p: string) =>
+          p.includes('store.ts')
+            ? "import { createCtx } from '@/core';\nexport const ctx = createCtx<BackendContext>();"
+            : null,
+        getNodesByName: () => [],
+        getNodesInFile: () => [],
+        getProjectRoot: () => '/test',
+        fileExists: () => true,
+      } as any;
+      expect(sduiResolver.detect(context)).toBe(true);
+    });
+
     it('rejects non-SDUI project', () => {
       const context = {
         getAllFiles: () => ['src/index.ts'],
@@ -493,6 +508,62 @@ describe('SDUI Framework Resolver', () => {
       expect(refRefs).toHaveLength(0);
       expect(ctxRefs).toHaveLength(1);
       expect(ctxRefs[0]!.referenceName).toBe('__sdui_ctx:BackendContext');
+    });
+  });
+
+  describe('integration — sync re-detects frameworks on new files', () => {
+    let tmpDir: string;
+
+    beforeAll(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-sdui-sync-'));
+      fs.mkdirSync(path.join(tmpDir, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(tmpDir, 'src/index.ts'),
+        "export const app = 'hello';\n"
+      );
+    });
+
+    afterAll(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('detects SDUI after sync when screens are added post-init', async () => {
+      const { CodeGraph } = await import('../src/index');
+      const cg = await CodeGraph.init(tmpDir);
+      try {
+        await cg.indexAll();
+        expect(cg.getDetectedFrameworks()).not.toContain('sdui');
+
+        const screenDir = path.join(tmpDir, 'src/screens/main/desktop');
+        const layoutDir = path.join(screenDir, 'layout');
+        fs.mkdirSync(layoutDir, { recursive: true });
+        fs.writeFileSync(path.join(screenDir, 'store.ts'),
+          "import { createRef } from './core';\n" +
+          "export const state = createRef<State>('state');\n"
+        );
+        fs.writeFileSync(path.join(screenDir, 'computed.ts'),
+          "export function computed() { return {}; }\n"
+        );
+        fs.writeFileSync(path.join(layoutDir, 'header.ts'),
+          "import { createRef } from '../../core';\n" +
+          "const cr = createRef<Computed>('computed');\n" +
+          "export function header() { return cr; }\n"
+        );
+
+        await cg.sync();
+
+        expect(cg.getDetectedFrameworks()).toContain('sdui');
+
+        const queries = (cg as any).queries;
+        const headerFile = queries.getNodesByFile('src/screens/main/desktop/layout/header.ts')
+          .find((n: any) => n.kind === 'file');
+        expect(headerFile).toBeDefined();
+
+        const outgoing = queries.getOutgoingEdges(headerFile!.id);
+        const fwEdges = outgoing.filter((e: any) => e.metadata?.resolvedBy === 'framework');
+        expect(fwEdges.length).toBeGreaterThan(0);
+      } finally {
+        cg.close();
+      }
     });
   });
 

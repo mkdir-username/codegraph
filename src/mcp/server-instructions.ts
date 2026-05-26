@@ -46,6 +46,7 @@ of calls; a grep/read exploration is dozens.
 - **"Show me several related symbols' source / survey an area."** → \`codegraph_explore\` (ONE capped call; prefer over many codegraph_node/Read)
 - **"What's in directory X?"** → \`codegraph_files\`
 - **"Is the index ready / what's its size?"** → \`codegraph_status\`
+- **"Force re-index / index feels stale"** → \`codegraph_sync\` (triggers immediate incremental sync)
 
 ## Common chains
 

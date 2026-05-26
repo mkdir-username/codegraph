@@ -1418,6 +1418,10 @@ export class ExtractionOrchestrator {
       await loadGrammarsForLanguages(neededLanguages);
     }
 
+    if (filesAdded > 0) {
+      this.detectedFrameworkNames = null;
+    }
+
     // Index changed files
     const total = filesToIndex.length;
     for (let i = 0; i < filesToIndex.length; i++) {

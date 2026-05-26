@@ -51,7 +51,7 @@ export const sduiResolver: FrameworkResolver = {
     );
     for (const sf of storeFiles.slice(0, 3)) {
       const content = context.readFile(sf);
-      if (content && content.includes('createRef')) return true;
+      if (content && (content.includes('createRef') || content.includes('createCtx'))) return true;
     }
     return false;
   },

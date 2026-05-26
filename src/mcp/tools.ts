@@ -516,6 +516,16 @@ export const tools: ToolDefinition[] = [
     },
   },
   {
+    name: 'codegraph_sync',
+    description: 'Trigger an incremental re-index of the project. Detects new, modified, and deleted files since the last sync and updates the index. Use when you suspect the index is stale or after bulk file operations (git checkout, branch switch, bulk copy). Returns sync statistics. The watcher normally handles this automatically with a 2-second debounce, but this tool lets you force an immediate sync.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectPath: projectPathProperty,
+      },
+    },
+  },
+  {
     name: 'codegraph_files',
     description: 'REQUIRED for file/folder exploration. Get the project file structure from the CodeGraph index. Returns a tree view of all indexed files with metadata (language, symbol count). Much faster than Glob/filesystem scanning. Use this FIRST when exploring project structure, finding files, or understanding codebase organization.',
     inputSchema: {
@@ -979,6 +989,8 @@ export class ToolHandler {
           // (see handleStatus), so we skip the auto-banner wrapper here to
           // avoid duplicating the same info at the top of the response.
           return await this.handleStatus(args);
+        case 'codegraph_sync':
+          return await this.handleSync(args);
         case 'codegraph_files':
           result = await this.handleFiles(args); break;
         case 'codegraph_trace':
@@ -2227,6 +2239,29 @@ export class ToolHandler {
       }
     }
 
+    return this.textResult(lines.join('\n'));
+  }
+
+  /**
+   * Handle codegraph_sync — trigger an incremental re-index
+   */
+  private async handleSync(args: Record<string, unknown>): Promise<ToolResult> {
+    const cg = this.getCodeGraph(args.projectPath as string | undefined);
+    const result = await cg.sync();
+    const changed = result.filesAdded + result.filesModified + result.filesRemoved;
+    const lines = [
+      '## Sync Complete',
+      '',
+      `**Files checked:** ${result.filesChecked}`,
+      `**Added:** ${result.filesAdded}`,
+      `**Modified:** ${result.filesModified}`,
+      `**Removed:** ${result.filesRemoved}`,
+      `**Nodes updated:** ${result.nodesUpdated}`,
+      `**Duration:** ${result.durationMs}ms`,
+    ];
+    if (changed === 0) {
+      lines.push('', 'Index is up to date — no changes detected.');
+    }
     return this.textResult(lines.join('\n'));
   }
 
