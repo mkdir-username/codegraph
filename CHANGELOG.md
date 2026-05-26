@@ -9,6 +9,10 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **File watcher no longer marks edited files as fresh when another process holds the index lock.** When a second writer (concurrent `codegraph index`, a git hook, another MCP daemon) held `.codegraph/codegraph.lock`, `CodeGraph.sync()` returned a zero-shape no-op instead of throwing. The file watcher took that as a successful sync and cleared `pendingFiles` — so the per-file staleness signal MCP tools surface to agents (issue #403) dropped immediately, even though the edit was never indexed. `CodeGraph.watch()` now converts that no-op into a typed `LockUnavailableError` thrown into the watcher; the existing retry path preserves `pendingFiles` and reschedules until the lock becomes available. The error is logged at debug only (no `onSyncError` callback) so a long-running external indexer doesn't spam stderr every debounce cycle. Closes #449.
+- **Watch sync no longer aborts with `FOREIGN KEY constraint failed`.** PR #62 plugged this FK violation at the extraction layer (empty-named nodes whose containment edges had no target), but the same violation kept reappearing on v0.9.5 during the daemon's *watch sync* — not on initial index. Once an agent's daemon had been running long enough to accumulate edits, a resolver lookup that crossed a framework-specific cache could hand back a node whose row had been removed by a recent file rewrite, and the FK check then aborted the entire resolution batch, leaving the user's daemon log filling with `Watch sync failed { error: 'FOREIGN KEY constraint failed' }`. `QueryBuilder.insertEdges` now validates every batch's endpoints against the `nodes` table directly (one fresh `SELECT id IN (...)` per batch, no cache) and silently skips edges with missing source or target — so a stale lookup result drops one edge instead of aborting the whole sync. Surfaces as a fresh `codegraph init`/`index` cycle now surviving its first watch-sync cycle without the FK error, and the daemon recovering naturally instead of compounding into further failures. Closes #455.
+
 ## [0.9.5] - 2026-05-25
 
 ### Added
