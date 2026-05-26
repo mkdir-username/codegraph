@@ -3016,6 +3016,19 @@ export function multiply(a: number, b: number): number {
 
     cg.close();
   });
+
+  it('should respect .codegraphignore patterns', () => {
+    fs.mkdirSync(path.join(tempDir, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'generated'), { recursive: true });
+    fs.writeFileSync(path.join(tempDir, 'src', 'real.ts'), 'export const x = 1;');
+    fs.writeFileSync(path.join(tempDir, 'generated', 'noise.ts'), 'export const y = 2;');
+    fs.writeFileSync(path.join(tempDir, '.codegraphignore'), 'generated/\n');
+
+    const files = scanDirectory(tempDir);
+    const names = files.map((f) => path.basename(f));
+    expect(names).toContain('real.ts');
+    expect(names).not.toContain('noise.ts');
+  });
 });
 
 describe('Path Normalization', () => {

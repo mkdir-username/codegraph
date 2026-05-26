@@ -169,6 +169,12 @@ const DEFAULT_IGNORE_PATTERNS: string[] = [
 export function buildDefaultIgnore(rootDir: string): Ignore {
   const ig = ignore().add(DEFAULT_IGNORE_PATTERNS);
   try {
+    const cgIgnore = path.join(rootDir, '.codegraphignore');
+    if (fs.existsSync(cgIgnore)) ig.add(fs.readFileSync(cgIgnore, 'utf-8'));
+  } catch {
+    // Unreadable .codegraphignore — skip silently.
+  }
+  try {
     const rootGitignore = path.join(rootDir, '.gitignore');
     if (fs.existsSync(rootGitignore)) ig.add(fs.readFileSync(rootGitignore, 'utf-8'));
   } catch {
