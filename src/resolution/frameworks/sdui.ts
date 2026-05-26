@@ -9,6 +9,7 @@ const REF_TO_FILE: Record<string, string> = {
   state: 'store.ts',
   data: 'store.ts',
   template: 'store.ts',
+  computed: 'computed.ts',
 };
 
 function extractCreateRefCalls(content: string): Array<{ arg: string; line: number; column: number }> {
@@ -72,26 +73,6 @@ export const sduiResolver: FrameworkResolver = {
     const lang = filePath.endsWith('.tsx') ? 'tsx' as const : 'typescript' as const;
 
     if (calls.length > 0) {
-      const screenMatch = filePath.match(/src\/screens\/([^/]+)\//);
-      if (screenMatch) {
-        const screenName = screenMatch[1]!;
-        const platformMatch = filePath.match(/src\/screens\/[^/]+\/(\w+)\//);
-        const platform = platformMatch ? platformMatch[1]! : 'default';
-        nodes.push({
-          id: `component:${screenName}/${platform}`,
-          kind: 'component',
-          name: `${screenName}/${platform}`,
-          qualifiedName: `sdui:${screenName}/${platform}`,
-          filePath,
-          language: lang,
-          startLine: 1,
-          endLine: calls[calls.length - 1]!.line,
-          startColumn: 0,
-          endColumn: 0,
-          updatedAt: Date.now(),
-        });
-      }
-
       for (const { arg, line, column } of calls) {
         if (arg === basename) continue;
         references.push({
@@ -149,20 +130,47 @@ export const sduiResolver: FrameworkResolver = {
     const targetNames = REF_TO_FILE[arg]
       ? [REF_TO_FILE[arg]!]
       : [`${arg}.ts`, `${arg}.tsx`];
-    const dir = ref.filePath.replace(/\/[^/]+$/, '');
-    const parentDir = dir.replace(/\/[^/]+$/, '');
 
-    for (const base of [dir, parentDir]) {
+    const dir = ref.filePath.replace(/\/[^/]+$/, '');
+    const screenRootMatch = ref.filePath.match(/^(.*src\/screens\/[^/]+)\//);
+    const screenRoot = screenRootMatch ? screenRootMatch[1]! : null;
+
+    const searchDirs: string[] = [dir];
+    let current = dir;
+    while (current !== screenRoot && current.includes('/')) {
+      current = current.replace(/\/[^/]+$/, '');
+      searchDirs.push(current);
+    }
+
+    if (screenRoot) {
+      const allFiles = context.getAllFiles();
+      const platformDirs = new Set<string>();
+      const prefix = screenRoot + '/';
+      for (const f of allFiles) {
+        if (f.startsWith(prefix)) {
+          const seg = f.slice(prefix.length).split('/')[0];
+          if (seg && !seg.includes('.')) platformDirs.add(prefix + seg);
+        }
+      }
+      for (const pd of platformDirs) {
+        if (!searchDirs.includes(pd)) searchDirs.push(pd);
+      }
+    }
+
+    for (const base of searchDirs) {
       for (const targetName of targetNames) {
         const candidate = base + '/' + targetName;
         if (context.fileExists(candidate)) {
           const nodes = context.getNodesInFile(candidate);
           const fileNode = nodes.find((n) => n.kind === 'file');
           if (fileNode) {
+            const isLocal = base === dir;
+            const isParent = base === dir.replace(/\/[^/]+$/, '');
+            const confidence = isLocal ? 0.80 : isParent ? 0.70 : 0.60;
             return {
               original: ref,
               targetNodeId: fileNode.id,
-              confidence: base === dir ? 0.80 : 0.70,
+              confidence,
               resolvedBy: 'framework',
             };
           }

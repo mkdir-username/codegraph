@@ -267,6 +267,70 @@ describe('SDUI Framework Resolver', () => {
     });
   });
 
+  describe('resolve — screen-root scope', () => {
+    it('resolves ref from deep module path to platform store.ts', () => {
+      const ref = {
+        fromNodeId: 'file:src/screens/main/modules/accounts/computed.ts',
+        referenceName: '__sdui_ref:state',
+        referenceKind: 'references' as const,
+        line: 6, column: 0,
+        filePath: 'src/screens/main/modules/accounts/computed.ts',
+        language: 'typescript' as const,
+      };
+      const storeNode = {
+        id: 'file:src/screens/main/desktop/store.ts',
+        kind: 'file' as const, name: 'store.ts',
+        filePath: 'src/screens/main/desktop/store.ts',
+        qualifiedName: 'src/screens/main/desktop/store.ts',
+        language: 'typescript' as const,
+        startLine: 1, endLine: 50, startColumn: 0, endColumn: 0, updatedAt: Date.now(),
+      };
+      const context = {
+        getNodesInFile: (p: string) => p.endsWith('desktop/store.ts') ? [storeNode] : [],
+        fileExists: (p: string) => p === 'src/screens/main/desktop/store.ts',
+        getAllFiles: () => [
+          'src/screens/main/desktop/store.ts',
+          'src/screens/main/modules/accounts/computed.ts',
+        ],
+        getProjectRoot: () => '/test',
+        getNodesByName: () => [], readFile: () => null,
+      } as any;
+      const result = sduiResolver.resolve(ref, context);
+      expect(result).not.toBeNull();
+      expect(result?.targetNodeId).toBe('file:src/screens/main/desktop/store.ts');
+      expect(result?.confidence).toBeLessThanOrEqual(0.65);
+    });
+
+    it('resolves template ref from module to desktop/store.ts', () => {
+      const ref = {
+        fromNodeId: 'file:src/screens/main/modules/offers/computed.ts',
+        referenceName: '__sdui_ref:template',
+        referenceKind: 'references' as const,
+        line: 7, column: 0,
+        filePath: 'src/screens/main/modules/offers/computed.ts',
+        language: 'typescript' as const,
+      };
+      const storeNode = {
+        id: 'file:src/screens/main/desktop/store.ts',
+        kind: 'file' as const, name: 'store.ts',
+        filePath: 'src/screens/main/desktop/store.ts',
+        qualifiedName: 'src/screens/main/desktop/store.ts',
+        language: 'typescript' as const,
+        startLine: 1, endLine: 100, startColumn: 0, endColumn: 0, updatedAt: Date.now(),
+      };
+      const context = {
+        getNodesInFile: (p: string) => p.endsWith('desktop/store.ts') ? [storeNode] : [],
+        fileExists: (p: string) => p === 'src/screens/main/desktop/store.ts',
+        getAllFiles: () => ['src/screens/main/desktop/store.ts'],
+        getProjectRoot: () => '/test',
+        getNodesByName: () => [], readFile: () => null,
+      } as any;
+      const result = sduiResolver.resolve(ref, context);
+      expect(result).not.toBeNull();
+      expect(result?.targetNodeId).toBe('file:src/screens/main/desktop/store.ts');
+    });
+  });
+
   describe('extract — self-reference filtering', () => {
     it('skips createRef in store.ts files (definitions, not references)', () => {
       const content = "export const state = createRef<DesktopState>('state');\nexport const data = createRef<DesktopData>('data');";
@@ -291,18 +355,6 @@ describe('SDUI Framework Resolver', () => {
   });
 
   describe('component node emission', () => {
-    it('emits component node for screen layout files', () => {
-      const content = "const cr = createRef<X>('computed');\nexport function header() { return {}; }";
-      const result = sduiResolver.extract!(
-        'src/screens/1.1_main_screen_2025/desktop/layout/header.ts',
-        content
-      );
-      const componentNodes = result.nodes.filter((n: any) => n.kind === 'component');
-      expect(componentNodes).toHaveLength(1);
-      expect(componentNodes[0]!.name).toContain('1.1_main_screen_2025');
-      expect(componentNodes[0]!.name).toContain('desktop');
-    });
-
     it('does not emit component node for non-screen files', () => {
       const content = "const x = createRef('test');";
       const result = sduiResolver.extract!('src/core/helpers.ts', content);
