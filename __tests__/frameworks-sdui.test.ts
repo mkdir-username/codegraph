@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { sduiResolver } from '../src/resolution/frameworks/sdui';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 
 describe('SDUI Framework Resolver', () => {
   describe('detection', () => {
@@ -33,11 +36,29 @@ describe('SDUI Framework Resolver', () => {
 
   describe('extract', () => {
     it('emits refs for createRef string args in screen files', () => {
-      const content = "export const cr = createRef<X>('computed');\nexport const st = createRef<Y>('state');";
-      const result = sduiResolver.extract!('src/screens/main/desktop/store.ts', content);
+      const content = "const cr = createRef<X>('computed');\nconst st = createRef<Y>('state');";
+      const result = sduiResolver.extract!('src/screens/main/desktop/layout/header.ts', content);
       expect(result.references).toHaveLength(2);
       expect(result.references[0]!.referenceName).toBe('__sdui_ref:computed');
       expect(result.references[1]!.referenceName).toBe('__sdui_ref:state');
+    });
+
+    it('ignores createRef in comments', () => {
+      const content = [
+        "// const old = createRef<X>('legacyComputed');",
+        "/* createRef<Y>('disabled') */",
+        "const cr = createRef<Z>('computed');",
+      ].join('\n');
+      const result = sduiResolver.extract!('src/screens/main/desktop/layout/header.ts', content);
+      expect(result.references).toHaveLength(1);
+      expect(result.references[0]!.referenceName).toBe('__sdui_ref:computed');
+    });
+
+    it('calculates correct column for createRef calls', () => {
+      const content = "const pad = 'x';  createRef<X>('computed');";
+      const result = sduiResolver.extract!('src/screens/main/desktop/layout/header.ts', content);
+      expect(result.references).toHaveLength(1);
+      expect(result.references[0]!.column).toBeGreaterThan(0);
     });
 
     it('skips non-screen files', () => {
@@ -100,6 +121,333 @@ describe('SDUI Framework Resolver', () => {
         getNodesByName: () => [],
       } as any;
       expect(sduiResolver.resolve(ref, context)).toBeNull();
+    });
+
+    it('resolves __sdui_ref:state to store.ts (not state.ts)', () => {
+      const ref = {
+        fromNodeId: 'file:src/screens/main/desktop/layout/header.ts',
+        referenceName: '__sdui_ref:state',
+        referenceKind: 'references' as const,
+        line: 28, column: 0,
+        filePath: 'src/screens/main/desktop/layout/header.ts',
+        language: 'typescript' as const,
+      };
+      const storeNode = {
+        id: 'file:src/screens/main/desktop/store.ts',
+        kind: 'file' as const, name: 'store.ts',
+        filePath: 'src/screens/main/desktop/store.ts',
+        qualifiedName: 'src/screens/main/desktop/store.ts',
+        language: 'typescript' as const,
+        startLine: 1, endLine: 50, startColumn: 0, endColumn: 0, updatedAt: Date.now(),
+      };
+      const context = {
+        getNodesInFile: (p: string) => p.endsWith('store.ts') ? [storeNode] : [],
+        fileExists: (p: string) => p.endsWith('store.ts'),
+        getProjectRoot: () => '/test',
+        getAllFiles: () => [], getNodesByName: () => [], readFile: () => null,
+      } as any;
+      const result = sduiResolver.resolve(ref, context);
+      expect(result).not.toBeNull();
+      expect(result?.targetNodeId).toBe('file:src/screens/main/desktop/store.ts');
+    });
+
+    it('resolves __sdui_ref:data to store.ts', () => {
+      const ref = {
+        fromNodeId: 'file:src/screens/main/desktop/layout/content.ts',
+        referenceName: '__sdui_ref:data',
+        referenceKind: 'references' as const,
+        line: 5, column: 0,
+        filePath: 'src/screens/main/desktop/layout/content.ts',
+        language: 'typescript' as const,
+      };
+      const storeNode = {
+        id: 'file:src/screens/main/desktop/store.ts',
+        kind: 'file' as const, name: 'store.ts',
+        filePath: 'src/screens/main/desktop/store.ts',
+        qualifiedName: 'src/screens/main/desktop/store.ts',
+        language: 'typescript' as const,
+        startLine: 1, endLine: 50, startColumn: 0, endColumn: 0, updatedAt: Date.now(),
+      };
+      const context = {
+        getNodesInFile: (p: string) => p.endsWith('store.ts') ? [storeNode] : [],
+        fileExists: (p: string) => p.endsWith('store.ts'),
+        getProjectRoot: () => '/test',
+        getAllFiles: () => [], getNodesByName: () => [], readFile: () => null,
+      } as any;
+      const result = sduiResolver.resolve(ref, context);
+      expect(result).not.toBeNull();
+      expect(result?.targetNodeId).toBe('file:src/screens/main/desktop/store.ts');
+    });
+  });
+
+  describe('resolve — additional coverage', () => {
+    it('resolves __sdui_ref:template to store.ts', () => {
+      const ref = {
+        fromNodeId: 'file:src/screens/main/modules/accounts/computed.ts',
+        referenceName: '__sdui_ref:template',
+        referenceKind: 'references' as const,
+        line: 10, column: 0,
+        filePath: 'src/screens/main/modules/accounts/computed.ts',
+        language: 'typescript' as const,
+      };
+      const storeNode = {
+        id: 'file:src/screens/main/modules/accounts/store.ts',
+        kind: 'file' as const, name: 'store.ts',
+        filePath: 'src/screens/main/modules/accounts/store.ts',
+        qualifiedName: 'src/screens/main/modules/accounts/store.ts',
+        language: 'typescript' as const,
+        startLine: 1, endLine: 50, startColumn: 0, endColumn: 0, updatedAt: Date.now(),
+      };
+      const context = {
+        getNodesInFile: (p: string) => p.endsWith('store.ts') ? [storeNode] : [],
+        fileExists: (p: string) => p.endsWith('store.ts'),
+        getProjectRoot: () => '/test',
+        getAllFiles: () => [], getNodesByName: () => [], readFile: () => null,
+      } as any;
+      const result = sduiResolver.resolve(ref, context);
+      expect(result).not.toBeNull();
+      expect(result?.targetNodeId).toBe('file:src/screens/main/modules/accounts/store.ts');
+    });
+
+    it('resolves ref to .tsx file when .ts does not exist', () => {
+      const ref = {
+        fromNodeId: 'file:src/screens/main/desktop/layout/header.ts',
+        referenceName: '__sdui_ref:widget',
+        referenceKind: 'references' as const,
+        line: 5, column: 0,
+        filePath: 'src/screens/main/desktop/layout/header.ts',
+        language: 'typescript' as const,
+      };
+      const widgetNode = {
+        id: 'file:src/screens/main/desktop/widget.tsx',
+        kind: 'file' as const, name: 'widget.tsx',
+        filePath: 'src/screens/main/desktop/widget.tsx',
+        qualifiedName: 'src/screens/main/desktop/widget.tsx',
+        language: 'tsx' as const,
+        startLine: 1, endLine: 50, startColumn: 0, endColumn: 0, updatedAt: Date.now(),
+      };
+      const context = {
+        getNodesInFile: (p: string) => p.endsWith('widget.tsx') ? [widgetNode] : [],
+        fileExists: (p: string) => p.endsWith('widget.tsx'),
+        getProjectRoot: () => '/test',
+        getAllFiles: () => [], getNodesByName: () => [], readFile: () => null,
+      } as any;
+      const result = sduiResolver.resolve(ref, context);
+      expect(result).not.toBeNull();
+      expect(result?.targetNodeId).toBe('file:src/screens/main/desktop/widget.tsx');
+    });
+
+    it('resolves ref via parent directory with lower confidence', () => {
+      const ref = {
+        fromNodeId: 'file:src/screens/main/desktop/layout/sub/nested.ts',
+        referenceName: '__sdui_ref:computed',
+        referenceKind: 'references' as const,
+        line: 5, column: 0,
+        filePath: 'src/screens/main/desktop/layout/sub/nested.ts',
+        language: 'typescript' as const,
+      };
+      const computedNode = {
+        id: 'file:src/screens/main/desktop/layout/computed.ts',
+        kind: 'file' as const, name: 'computed.ts',
+        filePath: 'src/screens/main/desktop/layout/computed.ts',
+        qualifiedName: 'src/screens/main/desktop/layout/computed.ts',
+        language: 'typescript' as const,
+        startLine: 1, endLine: 50, startColumn: 0, endColumn: 0, updatedAt: Date.now(),
+      };
+      const context = {
+        getNodesInFile: (p: string) => p.includes('computed.ts') ? [computedNode] : [],
+        fileExists: (p: string) => p === 'src/screens/main/desktop/layout/computed.ts',
+        getProjectRoot: () => '/test',
+        getAllFiles: () => [], getNodesByName: () => [], readFile: () => null,
+      } as any;
+      const result = sduiResolver.resolve(ref, context);
+      expect(result).not.toBeNull();
+      expect(result?.confidence).toBe(0.70);
+      expect(result?.targetNodeId).toBe('file:src/screens/main/desktop/layout/computed.ts');
+    });
+  });
+
+  describe('extract — self-reference filtering', () => {
+    it('skips createRef in store.ts files (definitions, not references)', () => {
+      const content = "export const state = createRef<DesktopState>('state');\nexport const data = createRef<DesktopData>('data');";
+      const result = sduiResolver.extract!('src/screens/main/desktop/store.ts', content);
+      expect(result.references).toHaveLength(0);
+    });
+
+    it('skips self-referencing createRef (computed.ts with createRef("computed"))', () => {
+      const content = "const cr = createRef<DesktopComputed>('computed');\nconst state = createRef<DesktopState>('state');";
+      const result = sduiResolver.extract!('src/screens/main/desktop/computed.ts', content);
+      expect(result.references).toHaveLength(1);
+      expect(result.references[0]!.referenceName).toBe('__sdui_ref:state');
+    });
+
+    it('emits refs from layout files (references, not definitions)', () => {
+      const content = "const cr = createRef<DesktopComputed>('computed');\nconst state = createRef<DesktopState>('state');";
+      const result = sduiResolver.extract!('src/screens/main/desktop/layout/header.ts', content);
+      expect(result.references).toHaveLength(2);
+      expect(result.references[0]!.referenceName).toBe('__sdui_ref:computed');
+      expect(result.references[1]!.referenceName).toBe('__sdui_ref:state');
+    });
+  });
+
+  describe('component node emission', () => {
+    it('emits component node for screen layout files', () => {
+      const content = "const cr = createRef<X>('computed');\nexport function header() { return {}; }";
+      const result = sduiResolver.extract!(
+        'src/screens/1.1_main_screen_2025/desktop/layout/header.ts',
+        content
+      );
+      const componentNodes = result.nodes.filter((n: any) => n.kind === 'component');
+      expect(componentNodes).toHaveLength(1);
+      expect(componentNodes[0]!.name).toContain('1.1_main_screen_2025');
+      expect(componentNodes[0]!.name).toContain('desktop');
+    });
+
+    it('does not emit component node for non-screen files', () => {
+      const content = "const x = createRef('test');";
+      const result = sduiResolver.extract!('src/core/helpers.ts', content);
+      expect(result.nodes).toHaveLength(0);
+    });
+
+    it('does not emit component node for store.ts', () => {
+      const content = "export const state = createRef<S>('state');";
+      const result = sduiResolver.extract!('src/screens/main/desktop/store.ts', content);
+      expect(result.nodes).toHaveLength(0);
+    });
+  });
+
+  describe('createCtx resolution', () => {
+    it('emits ref for createCtx calls', () => {
+      const content = [
+        "import { createCtx } from '../store';",
+        "const ctx = createCtx<BackendContext>();",
+        "export function header() { return ctx.accounts; }",
+      ].join('\n');
+      const result = sduiResolver.extract!(
+        'src/screens/main/desktop/layout/header.ts',
+        content
+      );
+      const ctxRefs = result.references.filter(
+        (r: any) => r.referenceName.startsWith('__sdui_ctx:')
+      );
+      expect(ctxRefs).toHaveLength(1);
+      expect(ctxRefs[0]!.referenceName).toBe('__sdui_ctx:BackendContext');
+    });
+
+    it('resolves __sdui_ctx:BackendContext to file containing the type', () => {
+      const ref = {
+        fromNodeId: 'file:src/screens/main/desktop/layout/header.ts',
+        referenceName: '__sdui_ctx:BackendContext',
+        referenceKind: 'references' as const,
+        line: 2, column: 0,
+        filePath: 'src/screens/main/desktop/layout/header.ts',
+        language: 'typescript' as const,
+      };
+      const targetNode = {
+        id: 'file:src/screens/main/modules/store/backend-context.ts',
+        kind: 'file' as const, name: 'backend-context.ts',
+        filePath: 'src/screens/main/modules/store/backend-context.ts',
+        qualifiedName: 'src/screens/main/modules/store/backend-context.ts',
+        language: 'typescript' as const,
+        startLine: 1, endLine: 200, startColumn: 0, endColumn: 0, updatedAt: Date.now(),
+      };
+      const typeNode = {
+        id: 'type:BackendContext',
+        kind: 'type_alias' as const, name: 'BackendContext',
+        filePath: 'src/screens/main/modules/store/backend-context.ts',
+        qualifiedName: 'BackendContext',
+        language: 'typescript' as const,
+        startLine: 10, endLine: 50, startColumn: 0, endColumn: 0, updatedAt: Date.now(),
+      };
+      const context = {
+        getNodesByName: (name: string) => name === 'BackendContext' ? [typeNode] : [],
+        getNodesInFile: (p: string) => p.includes('backend-context') ? [targetNode, typeNode] : [],
+        fileExists: (p: string) => p.includes('backend-context'),
+        getProjectRoot: () => '/test',
+        getAllFiles: () => [], readFile: () => null,
+      } as any;
+      const result = sduiResolver.resolve(ref, context);
+      expect(result).not.toBeNull();
+      expect(result?.targetNodeId).toBe('file:src/screens/main/modules/store/backend-context.ts');
+      expect(result?.confidence).toBe(0.75);
+    });
+
+    it('ignores createCtx in comments', () => {
+      const content = [
+        "// const ctx = createCtx<OldContext>();",
+        "const ctx = createCtx<BackendContext>();",
+      ].join('\n');
+      const result = sduiResolver.extract!(
+        'src/screens/main/desktop/layout/header.ts',
+        content
+      );
+      const ctxRefs = result.references.filter(
+        (r: any) => r.referenceName.startsWith('__sdui_ctx:')
+      );
+      expect(ctxRefs).toHaveLength(1);
+      expect(ctxRefs[0]!.referenceName).toBe('__sdui_ctx:BackendContext');
+    });
+  });
+
+  describe('integration — full pipeline', () => {
+    let tmpDir: string;
+
+    beforeAll(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-sdui-'));
+      const screenDir = path.join(tmpDir, 'src/screens/main/desktop');
+      const layoutDir = path.join(screenDir, 'layout');
+      fs.mkdirSync(layoutDir, { recursive: true });
+
+      fs.writeFileSync(path.join(screenDir, 'store.ts'),
+        "import { createRef } from './core';\n" +
+        "export const state = createRef<State>('state');\n" +
+        "export const data = createRef<Data>('data');\n" +
+        "export function desktopState() { return {}; }\n"
+      );
+
+      fs.writeFileSync(path.join(screenDir, 'computed.ts'),
+        "import { state } from './store';\n" +
+        "export function desktopComputed() { return {}; }\n"
+      );
+
+      fs.writeFileSync(path.join(layoutDir, 'header.ts'),
+        "import { createRef } from '../../core';\n" +
+        "const cr = createRef<Computed>('computed');\n" +
+        "const st = createRef<State>('state');\n" +
+        "export function header() { return {}; }\n"
+      );
+    });
+
+    afterAll(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('creates edges from layout/header.ts to computed.ts and store.ts after full init', async () => {
+      const { CodeGraph } = await import('../src/index');
+      const cg = await CodeGraph.init(tmpDir);
+      try {
+        await cg.indexAll();
+
+        const queries = (cg as any).queries;
+        const headerFileNode = queries.getNodesByFile('src/screens/main/desktop/layout/header.ts')
+          .find((n: any) => n.kind === 'file');
+        expect(headerFileNode).toBeDefined();
+
+        const outgoing = queries.getOutgoingEdges(headerFileNode!.id);
+        const frameworkEdges = outgoing.filter(
+          (e: any) => e.metadata?.resolvedBy === 'framework'
+        );
+
+        expect(frameworkEdges.length).toBeGreaterThan(0);
+
+        const targets = frameworkEdges.map((e: any) => e.target);
+        const hasComputed = targets.some((t: string) => t.includes('computed.ts'));
+        const hasStore = targets.some((t: string) => t.includes('store.ts'));
+        expect(hasComputed).toBe(true);
+        expect(hasStore).toBe(true);
+      } finally {
+        cg.close();
+      }
     });
   });
 });

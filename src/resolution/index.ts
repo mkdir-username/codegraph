@@ -564,12 +564,15 @@ export class ReferenceResolver {
         }
       }
 
+      const isHeuristic = ref.resolvedBy !== 'exact-match' && ref.resolvedBy !== 'import';
+
       return {
         source: ref.original.fromNodeId,
         target: ref.targetNodeId,
         kind,
         line: ref.original.line,
         column: ref.original.column,
+        provenance: isHeuristic ? 'heuristic' as const : undefined,
         metadata: {
           confidence: ref.confidence,
           resolvedBy: ref.resolvedBy,
