@@ -335,7 +335,8 @@ describe('SDUI Framework Resolver', () => {
     it('skips createRef in store.ts files (definitions, not references)', () => {
       const content = "export const state = createRef<DesktopState>('state');\nexport const data = createRef<DesktopData>('data');";
       const result = sduiResolver.extract!('src/screens/main/desktop/store.ts', content);
-      expect(result.references).toHaveLength(0);
+      const refRefs = result.references.filter((r: any) => r.referenceName.startsWith('__sdui_ref:'));
+      expect(refRefs).toHaveLength(0);
     });
 
     it('skips self-referencing createRef (computed.ts with createRef("computed"))', () => {
@@ -436,6 +437,60 @@ describe('SDUI Framework Resolver', () => {
       const ctxRefs = result.references.filter(
         (r: any) => r.referenceName.startsWith('__sdui_ctx:')
       );
+      expect(ctxRefs).toHaveLength(1);
+      expect(ctxRefs[0]!.referenceName).toBe('__sdui_ctx:BackendContext');
+    });
+  });
+
+  describe('createCtx — self-ref prevention', () => {
+    it('returns null for createCtx self-reference (type defined in same file)', () => {
+      const ref = {
+        fromNodeId: 'file:src/screens/main/modules/store/backend-context.ts',
+        referenceName: '__sdui_ctx:BackendContext',
+        referenceKind: 'references' as const,
+        line: 195, column: 0,
+        filePath: 'src/screens/main/modules/store/backend-context.ts',
+        language: 'typescript' as const,
+      };
+      const typeNode = {
+        id: 'type:BackendContext',
+        kind: 'type_alias' as const, name: 'BackendContext',
+        filePath: 'src/screens/main/modules/store/backend-context.ts',
+        qualifiedName: 'BackendContext',
+        language: 'typescript' as const,
+        startLine: 10, endLine: 50, startColumn: 0, endColumn: 0, updatedAt: Date.now(),
+      };
+      const fileNode = {
+        id: 'file:src/screens/main/modules/store/backend-context.ts',
+        kind: 'file' as const, name: 'backend-context.ts',
+        filePath: 'src/screens/main/modules/store/backend-context.ts',
+        qualifiedName: 'src/screens/main/modules/store/backend-context.ts',
+        language: 'typescript' as const,
+        startLine: 1, endLine: 200, startColumn: 0, endColumn: 0, updatedAt: Date.now(),
+      };
+      const context = {
+        getNodesByName: (name: string) => name === 'BackendContext' ? [typeNode] : [],
+        getNodesInFile: (p: string) => p.includes('backend-context') ? [fileNode, typeNode] : [],
+        fileExists: () => false,
+        getProjectRoot: () => '/test',
+        getAllFiles: () => [], readFile: () => null,
+      } as any;
+      const result = sduiResolver.resolve(ref, context);
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('store.ts createCtx extraction', () => {
+    it('emits createCtx ref from store.ts but skips createRef', () => {
+      const content = [
+        "export const ctx = createCtx<BackendContext>();",
+        "export const state = createRef<DesktopState>('state');",
+        "export const data = createRef<DesktopData>('data');",
+      ].join('\n');
+      const result = sduiResolver.extract!('src/screens/main/desktop/store.ts', content);
+      const refRefs = result.references.filter((r: any) => r.referenceName.startsWith('__sdui_ref:'));
+      const ctxRefs = result.references.filter((r: any) => r.referenceName.startsWith('__sdui_ctx:'));
+      expect(refRefs).toHaveLength(0);
       expect(ctxRefs).toHaveLength(1);
       expect(ctxRefs[0]!.referenceName).toBe('__sdui_ctx:BackendContext');
     });

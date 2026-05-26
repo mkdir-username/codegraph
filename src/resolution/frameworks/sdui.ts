@@ -61,7 +61,22 @@ export const sduiResolver: FrameworkResolver = {
     const references: UnresolvedRef[] = [];
 
     if (!filePath.includes('src/screens/')) return { nodes, references };
-    if (filePath.endsWith('/store.ts')) return { nodes, references };
+
+    if (filePath.endsWith('/store.ts')) {
+      const safe = stripCommentsForRegex(content, 'typescript');
+      const ctxCalls = extractCreateCtxCalls(safe);
+      const fileNodeId = `file:${filePath}`;
+      const lang = filePath.endsWith('.tsx') ? 'tsx' as const : 'typescript' as const;
+      for (const { typeName, line, column } of ctxCalls) {
+        references.push({
+          fromNodeId: fileNodeId,
+          referenceName: SDUI_CTX_PREFIX + typeName,
+          referenceKind: 'references',
+          line, column, filePath, language: lang,
+        });
+      }
+      return { nodes, references };
+    }
 
     const safe = stripCommentsForRegex(content, 'typescript');
     const calls = extractCreateRefCalls(safe);
@@ -110,8 +125,8 @@ export const sduiResolver: FrameworkResolver = {
     if (ref.referenceName.startsWith(SDUI_CTX_PREFIX)) {
       const typeName = ref.referenceName.slice(SDUI_CTX_PREFIX.length);
       const typeNodes = context.getNodesByName(typeName);
-      if (typeNodes.length > 0) {
-        const typeNode = typeNodes[0]!;
+      for (const typeNode of typeNodes) {
+        if (typeNode.filePath === ref.filePath) continue;
         const fileNodes = context.getNodesInFile(typeNode.filePath);
         const fileNode = fileNodes.find((n) => n.kind === 'file');
         if (fileNode) {
