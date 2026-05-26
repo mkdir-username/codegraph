@@ -1080,6 +1080,13 @@ export class TreeSitterExtractor {
               this.extractVariableTypeAnnotation(child, varNode.id);
             }
 
+            // Walk value expression for call/instantiation references.
+            // Without this, `const x = foo(bar())` loses both edges
+            // because skipChildren blocks the normal walker path.
+            if (valueNode) {
+              this.visitValueForCalls(valueNode);
+            }
+
             // Exported const object-of-functions: `export const actions =
             // { default: async () => {} }` (SvelteKit form actions / handler maps
             // / route tables). Extract each function-valued property as a function
@@ -1717,6 +1724,25 @@ export class TreeSitterExtractor {
    * Visit function body and extract calls (and structural nodes).
    *
    * In addition to call expressions, this also detects class/struct/enum
+   * Walk a value expression subtree for call/instantiation references only.
+   * Used by extractVariable so `const x = foo(bar())` captures both call
+   * edges — skipChildren on lexical_declaration would otherwise lose them.
+   */
+  private visitValueForCalls(node: SyntaxNode): void {
+    if (!this.extractor) return;
+    if (this.extractor.callTypes.includes(node.type)) {
+      this.extractCall(node);
+    }
+    if (INSTANTIATION_KINDS.has(node.type)) {
+      this.extractInstantiation(node);
+    }
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child) this.visitValueForCalls(child);
+    }
+  }
+
+  /**
    * definitions inside function bodies. This handles two cases:
    *   1. Local class/struct/enum definitions (valid in C++, Java, etc.)
    *   2. C++ macro misparsing — macros like NLOHMANN_JSON_NAMESPACE_BEGIN cause

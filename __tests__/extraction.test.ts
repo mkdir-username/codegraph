@@ -218,6 +218,20 @@ function main() {
     const calls = result.unresolvedReferences.filter((r) => r.referenceKind === 'calls');
     expect(calls.some((c) => c.referenceName === 'processData')).toBe(true);
   });
+
+  it('should extract call references from module-level variable initializers', () => {
+    const code = `
+function createRef(name: string) { return name; }
+const computed = createRef('computed');
+const result = someHelper(createRef('other'));
+`;
+    const result = extractFromSource('refs.ts', code);
+    const calls = result.unresolvedReferences.filter((r) => r.referenceKind === 'calls');
+    const calleeNames = calls.map((c) => c.referenceName);
+    expect(calleeNames).toContain('createRef');
+    expect(calleeNames.filter((n) => n === 'createRef')).toHaveLength(2);
+    expect(calleeNames).toContain('someHelper');
+  });
 });
 
 describe('Arrow Function Export Extraction', () => {
