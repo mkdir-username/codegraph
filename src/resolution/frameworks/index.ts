@@ -25,6 +25,7 @@ import { swiftObjcBridgeResolver } from './swift-objc';
 import { reactNativeBridgeResolver } from './react-native';
 import { expoModulesResolver } from './expo-modules';
 import { fabricViewResolver } from './fabric';
+import { sduiResolver } from './sdui';
 
 /**
  * All registered framework resolvers
@@ -66,6 +67,8 @@ const FRAMEWORK_RESOLVERS: FrameworkResolver[] = [
   expoModulesResolver,
   // React Native Fabric / Codegen view components — TS spec → component nodes
   fabricViewResolver,
+  // SDUI — createRef string arg → sibling file resolution
+  sduiResolver,
 ];
 
 /**
