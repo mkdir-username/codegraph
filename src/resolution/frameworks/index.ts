@@ -11,6 +11,7 @@ import { laravelResolver } from './laravel';
 import { expressResolver } from './express';
 import { nestjsResolver } from './nestjs';
 import { reactResolver } from './react';
+import { reduxToolkitResolver } from './redux-toolkit';
 import { svelteResolver } from './svelte';
 import { vueResolver } from './vue';
 import { djangoResolver, flaskResolver, fastapiResolver } from './python';
@@ -38,6 +39,7 @@ const FRAMEWORK_RESOLVERS: FrameworkResolver[] = [
   expressResolver,
   nestjsResolver,
   reactResolver,
+  reduxToolkitResolver,
   svelteResolver,
   vueResolver,
   // Python
@@ -129,6 +131,7 @@ export { laravelResolver, FACADE_MAPPINGS } from './laravel';
 export { expressResolver } from './express';
 export { nestjsResolver } from './nestjs';
 export { reactResolver } from './react';
+export { reduxToolkitResolver } from './redux-toolkit';
 export { svelteResolver } from './svelte';
 export { vueResolver } from './vue';
 export { djangoResolver, flaskResolver, fastapiResolver } from './python';
