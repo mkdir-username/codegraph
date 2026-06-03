@@ -29,7 +29,7 @@ npx vitest run __tests__/extraction.test.ts -t "TypeScript"
 
 `copy-assets` (called from `build`) copies `src/db/schema.sql` and all `src/extraction/wasm/*.wasm` files into `dist/`. **Any new SQL or grammar wasm must be copied or it won't ship.**
 
-Node engines: `>=18.0.0 <25.0.0`. There is a hard exit on Node 25.x (see `src/bin/node-version-check.ts`).
+Node engines: `>=20.0.0 <25.0.0` (`MIN_NODE_MAJOR = 20`). There is a hard exit on Node 25.x — V8 turboshaft WASM JIT Zone allocator bug (see `src/bin/node-version-check.ts`).
 
 ## Architecture
 
@@ -253,6 +253,6 @@ publish actions on shared state. Write the files, hand the user the commands.
 
 ## House rules
 
-- The `0.7.x` line is in active multi-agent rollout. Any change to `src/installer/` (especially `targets/`) needs corresponding test coverage and a CHANGELOG entry — installer regressions break every new install silently.
+- The multi-agent installer is in active rollout (current line `0.9.x`). Any change to `src/installer/` (especially `targets/`) needs corresponding test coverage and a CHANGELOG entry — installer regressions break every new install silently.
 - When changing what the MCP tools do or how agents should use them, update **all three** of `src/mcp/server-instructions.ts`, `src/installer/instructions-template.ts`, and `.cursor/rules/codegraph.mdc` — they're written to different places but say the same thing.
 - CodeGraph provides **code context**, not product requirements. For new features, ask the user about UX, edge cases, and acceptance criteria — the graph won't tell you.
