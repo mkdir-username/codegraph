@@ -580,7 +580,7 @@ describe('SDUI Framework Resolver', () => {
         "import { createRef } from './core';\n" +
         "export const state = createRef<State>('state');\n" +
         "export const data = createRef<Data>('data');\n" +
-        "export function desktopState() { return {}; }\n"
+        "export function desktopData() { return {}; }\n"
       );
 
       fs.writeFileSync(path.join(screenDir, 'computed.ts'),
@@ -600,7 +600,7 @@ describe('SDUI Framework Resolver', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    it('creates edges from layout/header.ts to computed.ts and store.ts after full init', async () => {
+    it('creates edges from layout/header.ts to the producer functions in computed.ts and store.ts after full init', async () => {
       const { CodeGraph } = await import('../src/index');
       const cg = await CodeGraph.init(tmpDir);
       try {
@@ -618,11 +618,20 @@ describe('SDUI Framework Resolver', () => {
 
         expect(frameworkEdges.length).toBeGreaterThan(0);
 
-        const targets = frameworkEdges.map((e: any) => e.target);
-        const hasComputed = targets.some((t: string) => t.includes('computed.ts'));
-        const hasStore = targets.some((t: string) => t.includes('store.ts'));
-        expect(hasComputed).toBe(true);
-        expect(hasStore).toBe(true);
+        // #13: createRef edges now retarget from the sibling FILE node to the
+        // exported producer FUNCTION in that file (desktopComputed / desktopData),
+        // so the flow connects layout -> producer end-to-end.
+        const targetNodes = frameworkEdges
+          .map((e: any) => queries.getNodeById(e.target))
+          .filter(Boolean);
+        const computedProducer = targetNodes.find(
+          (n: any) => n.kind === 'function' && n.name === 'desktopComputed' && n.filePath.includes('computed.ts')
+        );
+        const storeProducer = targetNodes.find(
+          (n: any) => n.kind === 'function' && n.name === 'desktopData' && n.filePath.includes('store.ts')
+        );
+        expect(computedProducer).toBeDefined();
+        expect(storeProducer).toBeDefined();
       } finally {
         cg.close();
       }

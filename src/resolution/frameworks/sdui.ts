@@ -12,6 +12,38 @@ const REF_TO_FILE: Record<string, string> = {
   computed: 'computed.ts',
 };
 
+const REF_TO_PRODUCER_SUFFIX: Record<string, string> = {
+  state: 'Data',
+  data: 'Data',
+  template: 'Data',
+  computed: 'Computed',
+};
+
+const PRODUCER_KINDS = new Set<Node['kind']>(['function', 'method', 'variable', 'constant']);
+
+function findProducerNode(
+  candidatePath: string,
+  arg: string,
+  screenRoot: string | null,
+  fileNodes: Node[],
+): Node | null {
+  const suffix = REF_TO_PRODUCER_SUFFIX[arg];
+  if (!suffix) return null;
+
+  let platform: string | null = null;
+  if (screenRoot && candidatePath.startsWith(screenRoot + '/')) {
+    const rel = candidatePath.slice(screenRoot.length + 1);
+    const seg = rel.split('/')[0];
+    if (seg && !seg.includes('.')) platform = seg;
+  }
+  if (!platform) return null;
+
+  const producerName = platform + suffix;
+  return (
+    fileNodes.find((n) => PRODUCER_KINDS.has(n.kind) && n.name === producerName) ?? null
+  );
+}
+
 function extractCreateRefCalls(content: string): Array<{ arg: string; line: number; column: number }> {
   const re = /createRef[^(]*\(\s*['"](\w+)['"]/g;
   const results: Array<{ arg: string; line: number; column: number }> = [];
@@ -182,9 +214,10 @@ export const sduiResolver: FrameworkResolver = {
             const isLocal = base === dir;
             const isParent = base === dir.replace(/\/[^/]+$/, '');
             const confidence = isLocal ? 0.80 : isParent ? 0.70 : 0.60;
+            const producer = findProducerNode(candidate, arg, screenRoot, nodes);
             return {
               original: ref,
-              targetNodeId: fileNode.id,
+              targetNodeId: producer ? producer.id : fileNode.id,
               confidence,
               resolvedBy: 'framework',
             };
