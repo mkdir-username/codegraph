@@ -32,6 +32,34 @@ import {
 export { generateNodeId } from './tree-sitter-helpers';
 
 /**
+ * Strip TS assertion/coercion wrappers so the underlying expression is visible.
+ * `{...} as const`, `... satisfies T`, `... as T` and `x!` all box the real
+ * value in a wrapper node; without unwrapping, the object-of-functions handler
+ * and call walker see the wrapper and miss every member. Loops to handle stacked
+ * wrappers (`{...} as const satisfies T`).
+ */
+function unwrapAssertions(node: SyntaxNode | null): SyntaxNode | null {
+  let current = node;
+  while (current && (
+    current.type === 'as_expression' ||
+    current.type === 'satisfies_expression' ||
+    current.type === 'type_assertion' ||
+    current.type === 'non_null_expression'
+  )) {
+    // The asserted expression is the first named child for as/satisfies/non_null;
+    // for `<T>expr` (type_assertion) it's the trailing expression. `expression`
+    // field is present on the tree-sitter-typescript grammar nodes.
+    const inner = getChildByField(current, 'expression') ||
+      (current.type === 'type_assertion'
+        ? current.namedChild(current.namedChildCount - 1)
+        : current.namedChild(0));
+    if (!inner || inner === current) break;
+    current = inner;
+  }
+  return current;
+}
+
+/**
  * Extract the name from a node based on language
  */
 function extractName(node: SyntaxNode, source: string, extractor: LanguageExtractor): string {
@@ -1096,11 +1124,16 @@ export class TreeSitterExtractor {
               this.extractVariableTypeAnnotation(child, varNode.id);
             }
 
+            // Unwrap TS assertion wrappers (`{...} as const`, `... satisfies T`,
+            // `... as T`, `<T>...`, `x!`) so the object-of-functions handler below
+            // and the call walker see the underlying object, not the wrapper node.
+            const unwrapped = unwrapAssertions(valueNode);
+
             // Walk value expression for call/instantiation references.
             // Without this, `const x = foo(bar())` loses both edges
             // because skipChildren blocks the normal walker path.
-            if (valueNode) {
-              this.visitValueForCalls(valueNode);
+            if (unwrapped) {
+              this.visitValueForCalls(unwrapped);
             }
 
             // Exported const object-of-functions: `export const actions =
@@ -1109,10 +1142,10 @@ export class TreeSitterExtractor {
             // named by its key + walk its body so its calls (e.g. api.post) are
             // captured. Scoped to EXPORTED consts to exclude the inline-object
             // noise (`ctx.set({...})`) the object-method skip deliberately avoids.
-            if (isExported && valueNode &&
-                (valueNode.type === 'object' || valueNode.type === 'object_expression')) {
-              for (let j = 0; j < valueNode.namedChildCount; j++) {
-                const member = valueNode.namedChild(j);
+            if (isExported && unwrapped &&
+                (unwrapped.type === 'object' || unwrapped.type === 'object_expression')) {
+              for (let j = 0; j < unwrapped.namedChildCount; j++) {
+                const member = unwrapped.namedChild(j);
                 if (!member) continue;
                 if (member.type === 'pair') {
                   const v = getChildByField(member, 'value');
