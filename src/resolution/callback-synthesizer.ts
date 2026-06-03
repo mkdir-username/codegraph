@@ -776,10 +776,129 @@ function fabricNativeImplEdges(ctx: ResolutionContext): Edge[] {
 }
 
 /**
+ * Phase 7: const dispatch-table (`const MAP: Record<K,Fn> = { a: fnA, … }`
+ * invoked via `MAP[k](...)`). A strategy/handler map keyed by a runtime value
+ * and called through a computed member access is a dynamic dispatch with no
+ * static call edge, so a flow like `contractToTs → HANDLERS[el.type]() →
+ * stackToHelper` dead-ends at the table lookup and every named handler shows
+ * zero callers. Bridge it: when a `const` object literal maps keys to BARE
+ * function identifiers AND some function does a computed-member call on that map
+ * variable (`MAP[x](...)`), link the invoking function → every handler in the
+ * map.
+ *
+ * Anti-explosion gate: EVERY value in the literal must be a bare identifier that
+ * resolves to a function/method node — a map with any non-identifier value
+ * (number, string, object, arrow, call) is not a pure dispatch table and is
+ * skipped wholesale. Over-approximation accepted within a matched table (the
+ * invoker reaches every handler, reachability-correct) like the other channels.
+ */
+// Locate the head `const MAP (: Type)? = {` — the body is then brace-matched so
+// nested braces (block-body arrows, object values) don't truncate it.
+// The optional type annotation may itself contain `=>` (function types like
+// `Record<K, (x) => y>`), so the skip consumes `=>` pairs but stops at the lone
+// assignment `=`.
+const DISPATCH_DECL_HEAD_RE =
+  /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::(?:[^={]|=>)*)?=\s*\{/g;
+const FN_KINDS_DISPATCH = new Set(['method', 'function']);
+
+/** Index of the `}` matching the `{` at openIndex, or -1. */
+function matchDispatchBrace(content: string, openIndex: number): number {
+  let depth = 0;
+  for (let i = openIndex; i < content.length; i++) {
+    const ch = content[i];
+    if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** Split an object-literal body into top-level segments, respecting (), [], {}
+ *  nesting (not <> — `=>` arrows would corrupt angle-bracket counting). */
+function splitTopLevelEntries(body: string): string[] {
+  const segs: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if (ch === ')' || ch === ']' || ch === '}') depth--;
+    else if (ch === ',' && depth === 0) {
+      segs.push(body.slice(start, i));
+      start = i + 1;
+    }
+  }
+  segs.push(body.slice(start));
+  return segs;
+}
+
+/** Bare-identifier handler names in a dispatch-table body. Entries whose value
+ *  is not a single identifier (inline arrow, call, literal, object) are skipped
+ *  — real strategy maps mix bare handlers with inline arrows, so rejecting the
+ *  whole table on the first arrow loses every named handler. The computed-member
+ *  call site (`MAP[x](…)`) is the anti-explosion gate, not table purity. */
+function parseDispatchHandlers(body: string): string[] | null {
+  const names: string[] = [];
+  for (const seg of splitTopLevelEntries(body)) {
+    const s = seg.trim();
+    if (!s) continue;
+    const m = s.match(/^(?:['"]?[\w$]+['"]?|\[[^\]]+\])\s*:\s*([A-Za-z_$][\w$]*)$/);
+    if (m) names.push(m[1]!);
+  }
+  return names.length > 0 ? names : null;
+}
+
+function dispatchTableEdges(ctx: ResolutionContext): Edge[] {
+  const edges: Edge[] = [];
+  const seen = new Set<string>();
+  for (const file of ctx.getAllFiles()) {
+    const content = ctx.readFile(file);
+    if (!content || !content.includes('[')) continue; // computed-member call gate
+    const nodesInFile = ctx.getNodesInFile(file);
+    const lineOf = (idx: number) => content.slice(0, idx).split('\n').length;
+
+    // 1. Collect pure dispatch tables declared in this file: mapVar → handler names.
+    const tables = new Map<string, string[]>();
+    DISPATCH_DECL_HEAD_RE.lastIndex = 0;
+    let dm: RegExpExecArray | null;
+    while ((dm = DISPATCH_DECL_HEAD_RE.exec(content))) {
+      const open = dm.index + dm[0].length - 1; // index of the `{`
+      const close = matchDispatchBrace(content, open);
+      if (close === -1) continue;
+      const handlers = parseDispatchHandlers(content.slice(open + 1, close));
+      if (handlers) tables.set(dm[1]!, handlers);
+    }
+    if (tables.size === 0) continue;
+
+    // 2. Find computed-member calls `MAP[...](` and attribute to the enclosing fn.
+    for (const [mapVar, handlerNames] of tables) {
+      const callRe = new RegExp(`\\b${mapVar}\\s*\\[[^\\]]+\\]\\s*\\(`, 'g');
+      let cm: RegExpExecArray | null;
+      while ((cm = callRe.exec(content))) {
+        const invoker = enclosingFn(nodesInFile, lineOf(cm.index));
+        if (!invoker) continue;
+        for (const name of handlerNames) {
+          const handler = ctx.getNodesByName(name).find((n) => FN_KINDS_DISPATCH.has(n.kind));
+          if (!handler || handler.id === invoker.id) continue;
+          const key = `${invoker.id}>${handler.id}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          edges.push({
+            source: invoker.id, target: handler.id, kind: 'calls', line: invoker.startLine,
+            provenance: 'heuristic',
+            metadata: { synthesizedBy: 'dispatch-table', via: mapVar },
+          });
+        }
+      }
+    }
+  }
+  return edges;
+}
+
+/**
  * Synthesize dispatcher→callback edges (field observers + EventEmitters +
  * React re-render + JSX children + Vue templates + RN event channel +
- * Fabric native-impl). Returns the count added. Never throws into
- * indexing — callers wrap in try/catch.
+ * Fabric native-impl + const dispatch-table). Returns the count added. Never
+ * throws into indexing — callers wrap in try/catch.
  */
 export function synthesizeCallbackEdges(queries: QueryBuilder, ctx: ResolutionContext): number {
   const fieldEdges = fieldChannelEdges(queries, ctx);
@@ -792,6 +911,7 @@ export function synthesizeCallbackEdges(queries: QueryBuilder, ctx: ResolutionCo
   const ifaceEdges = interfaceOverrideEdges(queries);
   const rnEventEdgesList = rnEventEdges(ctx);
   const fabricNativeEdges = fabricNativeImplEdges(ctx);
+  const dispatchEdges = dispatchTableEdges(ctx);
 
   const merged: Edge[] = [];
   const seen = new Set<string>();
@@ -806,6 +926,7 @@ export function synthesizeCallbackEdges(queries: QueryBuilder, ctx: ResolutionCo
     ...ifaceEdges,
     ...rnEventEdgesList,
     ...fabricNativeEdges,
+    ...dispatchEdges,
   ]) {
     const key = `${e.source}>${e.target}`;
     if (seen.has(key)) continue;
