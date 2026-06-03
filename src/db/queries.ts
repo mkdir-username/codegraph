@@ -18,7 +18,7 @@ import {
   SearchResult,
 } from '../types';
 import { safeJsonParse } from '../utils';
-import { kindBonus, nameMatchBonus, scorePathRelevance } from '../search/query-utils';
+import { kindBonus, nameMatchBonus, scorePathRelevance, isGeneratedFile } from '../search/query-utils';
 import { parseQuery, boundedEditDistance } from '../search/query-parser';
 
 const SQLITE_PARAM_CHUNK_SIZE = 500;
@@ -601,6 +601,35 @@ export class QueryBuilder {
       results = this.searchNodesFuzzy(text, { kinds, languages, limit });
     }
 
+    // Single-char exact-name supplement. The FTS/LIKE/fuzzy paths all gate
+    // on length >= 2/3, and the FTS tokenizer drops punctuation like `$`, so
+    // a 1-char symbol name (`$`, `R`, `_`) is otherwise unreachable through
+    // search even though it exists in the graph. When the whole query is a
+    // single token of length 1, look it up by exact name directly, bypassing
+    // those gates.
+    const trimmedQuery = (text || query).trim();
+    if (trimmedQuery.length === 1 && !/\s/.test(trimmedQuery)) {
+      const existingIds = new Set(results.map(r => r.node.id));
+      let sql = 'SELECT * FROM nodes WHERE name = ? COLLATE NOCASE';
+      const params: (string | number)[] = [trimmedQuery];
+      if (kinds && kinds.length > 0) {
+        sql += ` AND kind IN (${kinds.map(() => '?').join(',')})`;
+        params.push(...kinds);
+      }
+      if (languages && languages.length > 0) {
+        sql += ` AND language IN (${languages.map(() => '?').join(',')})`;
+        params.push(...languages);
+      }
+      sql += ' LIMIT 20';
+      const rows = this.db.prepare(sql).all(...params) as NodeRow[];
+      for (const row of rows) {
+        if (!existingIds.has(row.id)) {
+          results.push({ node: rowToNode(row), score: 1 });
+          existingIds.add(row.id);
+        }
+      }
+    }
+
     // Supplement: ensure exact name matches are always candidates.
     // BM25 can bury short exact-match names (e.g. "getBean") under hundreds of
     // compound names (e.g. "getBeanDescriptor") in large codebases,
@@ -640,10 +669,25 @@ export class QueryBuilder {
         ...r,
         score: r.score
           + kindBonus(r.node.kind)
-          + scorePathRelevance(r.node.filePath, scoringQuery)
+          + scorePathRelevance(r.node.filePath, scoringQuery, r.node.docstring, r.node.kind)
           + nameMatchBonus(r.node.name, scoringQuery),
       }));
-      results.sort((a, b) => b.score - a.score);
+      results.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        // Deterministic signal-bearing tie-break on equal score, mirroring
+        // the SQL ORDER BY: exported first, generated last, shorter path
+        // first, then path lexicographically.
+        const aExp = a.node.isExported ? 1 : 0;
+        const bExp = b.node.isExported ? 1 : 0;
+        if (bExp !== aExp) return bExp - aExp;
+        const aGen = isGeneratedFile(a.node.filePath, a.node.docstring) ? 1 : 0;
+        const bGen = isGeneratedFile(b.node.filePath, b.node.docstring) ? 1 : 0;
+        if (aGen !== bGen) return aGen - bGen;
+        if (a.node.filePath.length !== b.node.filePath.length) {
+          return a.node.filePath.length - b.node.filePath.length;
+        }
+        return a.node.filePath < b.node.filePath ? -1 : a.node.filePath > b.node.filePath ? 1 : 0;
+      });
       // Trim to requested limit after rescoring
       if (results.length > limit) {
         results = results.slice(0, limit);
@@ -817,7 +861,18 @@ export class QueryBuilder {
       params.push(...languages);
     }
 
-    sql += ' ORDER BY score LIMIT ? OFFSET ?';
+    // Deterministic tie-break on equal bm25 score (negative — lower is
+    // better, so primary key is ascending). On ties prefer exported defs,
+    // demote generated-path stubs, then shorter / lexicographically-first
+    // path. Without this, equal-score duplicates fall back to rowid order
+    // and real src/ defs can land behind generated stubs past the cap.
+    sql += `
+      ORDER BY score,
+        nodes.is_exported DESC,
+        (CASE WHEN nodes.file_path LIKE '%/generated/%' OR nodes.file_path LIKE 'generated/%' THEN 1 ELSE 0 END) ASC,
+        length(nodes.file_path) ASC,
+        nodes.file_path ASC
+      LIMIT ? OFFSET ?`;
     params.push(ftsLimit, offset);
 
     try {

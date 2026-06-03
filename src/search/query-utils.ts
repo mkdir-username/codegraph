@@ -169,10 +169,40 @@ export function extractSearchTerms(query: string, options?: { stems?: boolean })
 }
 
 /**
+ * Whether a file is machine-generated and should be demoted in search.
+ * Two independent signals: a `generated/` path segment, or an `@generated`
+ * marker in the docstring (e.g. "@generated from SDUI JSON Schema").
+ */
+export function isGeneratedFile(filePath: string, docstring?: string): boolean {
+  const lower = filePath.toLowerCase();
+  if (lower.includes('/generated/') || lower.startsWith('generated/')) {
+    return true;
+  }
+  if (docstring && docstring.toLowerCase().includes('@generated')) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a file is a barrel index (re-export only) — index.ts/mod.rs/__init__.py.
+ */
+function isBarrelIndex(filePath: string): boolean {
+  const base = path.basename(filePath).toLowerCase();
+  return base === 'index.ts' || base === 'index.js' || base === 'index.tsx' ||
+    base === 'mod.rs' || base === '__init__.py';
+}
+
+/**
  * Score path relevance to a query
  * Higher score = more relevant path
  */
-export function scorePathRelevance(filePath: string, query: string): number {
+export function scorePathRelevance(
+  filePath: string,
+  query: string,
+  docstring?: string,
+  kind?: Node['kind']
+): number {
   // Use base terms only — stem variants inflate path scores by generating
   // many near-duplicate terms that all match the same path segments.
   const terms = extractSearchTerms(query, { stems: false });
@@ -197,6 +227,19 @@ export function scorePathRelevance(filePath: string, query: string): number {
   const isTestQuery = queryLower.includes('test') || queryLower.includes('spec');
   if (!isTestQuery && isTestFile(filePath)) {
     score -= 15;
+  }
+
+  // Demote machine-generated files so handwritten same-name symbols win the
+  // window. Softer than the test penalty (-12 vs -15). Skipped when the query
+  // is explicitly about generated code.
+  const queryTargetsGenerated = queryLower.includes('generated');
+  if (!queryTargetsGenerated && isGeneratedFile(filePath, docstring)) {
+    score -= 12;
+    // Generated barrel index.ts/mod.rs/__init__.py file-nodes flood short
+    // queries ("index"); demote them further so they never top the window.
+    if (kind === 'file' && isBarrelIndex(filePath)) {
+      score -= 10;
+    }
   }
 
   return score;
