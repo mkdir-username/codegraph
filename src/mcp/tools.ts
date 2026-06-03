@@ -188,6 +188,32 @@ export function getExploreOutputBudget(fileCount: number): ExploreOutputBudget {
 }
 
 /**
+ * A path that lives under a `generated/` segment — machine-emitted code
+ * (SDUI JSON-Schema stubs, icon/index barrels). These near-duplicate the
+ * hand-written authority and flood `codegraph_explore` (SDUI: 21% of all
+ * nodes are generated). The lever is ORDER, not collapsing — distinct unions
+ * still matter — so handleExplore's comparator sorts these AFTER src. Kept
+ * self-contained (no query-utils import) so the comparator stays a closure.
+ */
+export function isGeneratedExplorePath(filePath: string): boolean {
+  return /(?:^|\/)generated\//i.test(filePath);
+}
+
+/**
+ * The trailing "Explore budget" note for `codegraph_explore`. The per-call
+ * file coverage must reflect the tier's real `defaultMaxFiles` (10/12/14),
+ * not a stale literal — a too-low "~6 files" made the agent think it had
+ * less coverage than it did and Read prematurely.
+ */
+export function buildExploreBudgetNote(
+  callBudget: number,
+  fileCount: number,
+  budget: ExploreOutputBudget
+): string {
+  return `> **Explore budget: ${callBudget} calls for this project (${fileCount.toLocaleString()} files indexed).** Each call covers ~${budget.defaultMaxFiles} files; if your question spans more, spend your remaining calls on the uncovered area BEFORE falling back to Read — another explore is cheaper and more complete than reading those files. Synthesize once you've used ${callBudget}.`;
+}
+
+/**
  * Whether `codegraph_explore` should prefix source lines with their line
  * numbers (cat -n style: `<num>\t<code>`).
  *
@@ -1698,6 +1724,74 @@ export class ToolHandler {
     // Extract query terms for relevance checking
     const queryTerms = query.toLowerCase().split(/\s+/).filter(t => t.length >= 3);
 
+    // Anchor symbols: the callable(s) the agent EXPLICITLY named in the query.
+    // A file holding one is the very thing the agent asked to SEE — when its
+    // chosen section is oversize, the blind per-file slice cut the anchor's tail
+    // (SDUI `buildAlertView` is 312 lines > the 6500 cap, so the agent re-Read
+    // it). Render the anchor's body in full up to a higher ceiling and let the
+    // SIBLING context in the same file truncate instead. Only single near-unique
+    // callables qualify (≤3 defs) — a polymorphic name must not blow the cap.
+    //
+    // `ambiguousCoNames` are query tokens whose callable resolves to >5 nodes —
+    // a short shared name (`build`, exported by every SDUI screen). A file that
+    // matches the query ONLY through one of these, and holds no anchor, is
+    // co-name pollution: it must NOT outrank or steal a full-source slot from the
+    // queried symbol's own file. (#12)
+    const ANCHOR_MAX_CHARS = 14000;
+    const CO_NAME_AMBIGUOUS_THRESHOLD = 5;
+    const anchorNodeIds = new Set<string>();
+    const ambiguousCoNames = new Set<string>();
+    try {
+      const CALLABLE_ANCHOR = new Set(['method', 'function', 'component', 'constructor']);
+      const queryTokens = query
+        .split(/[\s,()[\]]+/)
+        .map((t) => t.trim())
+        .filter((t) => t.length >= 3 && /^[A-Za-z_$][\w$]*(?:(?:::|\.)[\w$]+)*$/.test(t))
+        .slice(0, 8);
+      for (const t of queryTokens) {
+        const cands = this.findAllSymbols(cg, t).nodes.filter((n) => CALLABLE_ANCHOR.has(n.kind));
+        if (cands.length >= 1 && cands.length <= 3) {
+          for (const n of cands) anchorNodeIds.add(n.id);
+        } else if (cands.length > CO_NAME_AMBIGUOUS_THRESHOLD) {
+          ambiguousCoNames.add(t.toLowerCase());
+        }
+      }
+      // FTS tokenizes a camelCase query (`buildAlertView`) into its parts, so the
+      // pollution actually arrives through a sub-token (`build`, a function every
+      // SDUI screen exports) that the whole-token pass never sees as ambiguous.
+      // Flag sub-tokens whose EXACT-name callable count exceeds the threshold.
+      const subTokens = new Set<string>();
+      for (const t of queryTokens) {
+        for (const sub of t.split(/(?<=[a-z0-9])(?=[A-Z])|[_$.:]+/)) {
+          const s = sub.trim().toLowerCase();
+          if (s.length >= 3 && !ambiguousCoNames.has(s)) subTokens.add(s);
+        }
+      }
+      for (const s of subTokens) {
+        const exact = this.findAllSymbols(cg, s).nodes.filter(
+          (n) => CALLABLE_ANCHOR.has(n.kind) && n.name.toLowerCase() === s,
+        );
+        if (exact.length > CO_NAME_AMBIGUOUS_THRESHOLD) ambiguousCoNames.add(s);
+      }
+    } catch {
+      // anchor detection is best-effort — fall back to the plain cap
+    }
+
+    // A file matched ONLY by an ambiguous co-name (and not holding the anchor or
+    // any anchor-relevant term) — its sole tie to the query is a polluting short
+    // name. Used by the comparator to sink it below the anchor's own file.
+    const isCoNamePollution = (filePath: string, nodes: Node[]): boolean => {
+      if (anchorNodeIds.size === 0 || ambiguousCoNames.size === 0) return false;
+      if (nodes.some((n) => anchorNodeIds.has(n.id))) return false;
+      const fp = filePath.toLowerCase();
+      // The only reason this file is relevant is an ambiguous co-name match.
+      const onlyAmbiguous = nodes.every((n) => {
+        const nm = n.name.toLowerCase();
+        return !ambiguousCoNames.size || ambiguousCoNames.has(nm) || !queryTerms.some((t) => nm.includes(t) || fp.includes(t));
+      });
+      return onlyAmbiguous && nodes.some((n) => ambiguousCoNames.has(n.name.toLowerCase()));
+    };
+
     // Test/spec/icon/i18n file detector — used both for the pre-sort hard
     // filter (tiny tier) and the comparator deprioritization (all tiers).
     const isLowValue = (p: string) => {
@@ -1749,15 +1843,33 @@ export class ToolHandler {
         return nodes.some(n => queryTerms.some(t => n.name.toLowerCase().includes(t)));
       };
 
+      // The file holding the explicitly-queried anchor comes first — it is the
+      // thing the agent asked to SEE, and it must claim a full-source slot before
+      // any co-named sibling can. (#12)
+      const aAnchor = a[1].nodes.some((n) => anchorNodeIds.has(n.id));
+      const bAnchor = b[1].nodes.some((n) => anchorNodeIds.has(n.id));
+      if (aAnchor !== bAnchor) return aAnchor ? -1 : 1;
+
+      // Sink co-name pollution — a file tied to the query only by a short
+      // ambiguous name (`build`, 7 defs) below everything else, so it can't steal
+      // a full-source slot from the queried symbol. (#12)
+      const aPoll = isCoNamePollution(a[0], a[1].nodes);
+      const bPoll = isCoNamePollution(b[0], b[1].nodes);
+      if (aPoll !== bPoll) return aPoll ? 1 : -1;
+
       const aRelevant = hasQueryRelevance(aPath, a[1].nodes);
       const bRelevant = hasQueryRelevance(bPath, b[1].nodes);
       if (aRelevant !== bRelevant) return aRelevant ? -1 : 1;
 
-      // Deprioritize test files, icon files, and i18n files
+      // Deprioritize test files, icon files, i18n files, and generated/ code —
+      // generated stubs near-duplicate the hand-written src and otherwise flood
+      // the source section (SDUI: generated/* outranks the authoritative
+      // components.ts). Order only; the unions still differ so we don't collapse.
       const isLowValue = (p: string) =>
         /\/(tests?|__tests?__|spec)\//i.test(p) ||
         /\bicons?\b/i.test(p) ||
-        /\bi18n\b/i.test(p);
+        /\bi18n\b/i.test(p) ||
+        isGeneratedExplorePath(p);
       const aLow = isLowValue(aPath);
       const bLow = isLowValue(bPath);
       if (aLow !== bLow) return aLow ? 1 : -1;
@@ -2155,13 +2267,21 @@ export class ToolHandler {
           return a.span - b.span;
         });
 
+      // When this file holds the explicitly-queried anchor, raise its per-file
+      // cap so the anchor's whole body survives instead of being tail-trimmed.
+      // Sibling context in the same file still truncates against the higher cap.
+      const holdsAnchor = group.nodes.some(n => anchorNodeIds.has(n.id));
+      const fileCharCap = holdsAnchor
+        ? Math.max(budget.maxCharsPerFile, ANCHOR_MAX_CHARS)
+        : budget.maxCharsPerFile;
+
       // Per-file budget is the SMALLER of the per-file cap and what's left of the
       // total output cap — so selection (which ranks by importance) keeps the
       // high-importance clusters and drops peripheral ones, instead of the
       // downstream source-order trim slicing off whatever comes last in the file.
       // That source-order slice is what cut Django's `_fetch_all` (L2237, importance
       // 9 — agent-named) when query.py was the last of four big files to be emitted.
-      const fileBudget = Math.min(budget.maxCharsPerFile, Math.max(0, budget.maxOutputChars - totalChars - 200));
+      const fileBudget = Math.min(fileCharCap, Math.max(0, budget.maxOutputChars - totalChars - 200));
       const chosenIndices = new Set<number>();
       let projectedChars = 0;
       for (const rc of rankedClusters) {
@@ -2194,8 +2314,8 @@ export class ToolHandler {
 
       // If a single chosen cluster is still oversize (long monolithic
       // function), tail-trim it. Better one trimmed view than nothing.
-      if (fileSection.length > budget.maxCharsPerFile) {
-        fileSection = fileSection.slice(0, budget.maxCharsPerFile) + '\n... (trimmed) ...';
+      if (fileSection.length > fileCharCap) {
+        fileSection = fileSection.slice(0, fileCharCap) + '\n... (trimmed) ...';
         fileTrimmed = true;
       }
       if (chosenIndices.size < clusters.length || fileTrimmed) {
@@ -2291,7 +2411,7 @@ export class ToolHandler {
         const stats = cg.getStats();
         const callBudget = getExploreBudget(stats.fileCount);
         lines.push('');
-        lines.push(`> **Explore budget: ${callBudget} calls for this project (${stats.fileCount.toLocaleString()} files indexed).** Each call covers ~6 files; if your question spans more, spend your remaining calls on the uncovered area BEFORE falling back to Read — another explore is cheaper and more complete than reading those files. Synthesize once you've used ${callBudget}.`);
+        lines.push(buildExploreBudgetNote(callBudget, stats.fileCount, budget));
       } catch {
         // Stats unavailable — skip budget note
       }
