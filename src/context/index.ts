@@ -132,6 +132,43 @@ function extractSymbolsFromQuery(query: string): string[] {
 }
 
 /**
+ * Verbs that signal an action/flow-shaped task ("how does X get validated/
+ * rendered/decoded…"). For these the user wants the behavior, so callable
+ * entry points should lead over type shapes of equal match.
+ */
+const ACTION_FLOW_VERBS = [
+  'validate', 'render', 'get', 'handle', 'decode', 'reach',
+  'transform', 'fetch',
+];
+
+function isActionFlowQuery(query: string): boolean {
+  const lower = query.toLowerCase();
+  return ACTION_FLOW_VERBS.some((verb) =>
+    new RegExp(`\\b${verb}(s|es|ed|ing|d)?\\b`).test(lower)
+  );
+}
+
+/**
+ * Decide whether a type-alias source body is trivial: a `= any`/`= unknown`
+ * widening, or a single-token re-export (`type A = B`). Such aliases carry no
+ * behavior a flow question asks about, so they don't belong in Entry Points.
+ */
+function isTrivialAliasBody(code: string): boolean {
+  const eq = code.indexOf('=');
+  if (eq === -1) return false;
+
+  const rhs = code
+    .slice(eq + 1)
+    .replace(/;?\s*$/, '')
+    .trim();
+
+  if (rhs === 'any' || rhs === 'unknown') return true;
+
+  // Single-token re-export: `type A = B` (a bare identifier, no composition).
+  return /^[A-Za-z_$][\w$]*$/.test(rhs);
+}
+
+/**
  * Default options for context building
  *
  * Tuned for minimal context usage while still providing useful results:
@@ -225,7 +262,7 @@ export class ContextBuilder {
     });
 
     // Get entry points (nodes from semantic search)
-    const entryPoints = this.getEntryPoints(subgraph);
+    const entryPoints = await this.getEntryPoints(subgraph, query);
 
     // Extract code blocks for key nodes
     const codeBlocks = opts.includeCode
@@ -1064,11 +1101,51 @@ export class ContextBuilder {
 
   /**
    * Get entry points from a subgraph (the root nodes)
+   *
+   * For action/flow-shaped task phrasing ("how does X get validated/rendered/
+   * decoded…") the user wants the behavior, not its shape. Callable roots
+   * (function/method) of equal match are boosted above type_alias/interface/
+   * enum, and trivial aliases (`= any`/`= unknown`, single-token re-export)
+   * are dropped from Entry Points entirely — they're noise, not entry points.
    */
-  private getEntryPoints(subgraph: Subgraph): Node[] {
-    return subgraph.roots
+  private async getEntryPoints(subgraph: Subgraph, query?: string): Promise<Node[]> {
+    const roots = subgraph.roots
       .map((id) => subgraph.nodes.get(id))
       .filter((n): n is Node => n !== undefined);
+
+    if (!query || !isActionFlowQuery(query)) {
+      return roots;
+    }
+
+    const callableKinds = new Set<NodeKind>(['function', 'method']);
+    const typeKinds = new Set<NodeKind>(['type_alias', 'interface', 'enum']);
+
+    // Drop trivial type aliases — they carry no behavior the flow question asks about.
+    const trivialFlags = await Promise.all(roots.map((n) => this.isTrivialAlias(n)));
+    const filtered = roots.filter((_, i) => !trivialFlags[i]);
+
+    // Stable re-rank: callables first, then everything else, original order within each group.
+    return filtered
+      .map((node, index) => ({ node, index }))
+      .sort((a, b) => {
+        const aRank = callableKinds.has(a.node.kind) ? 0 : typeKinds.has(a.node.kind) ? 2 : 1;
+        const bRank = callableKinds.has(b.node.kind) ? 0 : typeKinds.has(b.node.kind) ? 2 : 1;
+        if (aRank !== bRank) return aRank - bRank;
+        return a.index - b.index;
+      })
+      .map((entry) => entry.node);
+  }
+
+  /**
+   * Whether a node is a trivial type alias (`= any`/`= unknown` or a single-
+   * token re-export). Reads the alias source line since the body isn't stored
+   * on the node.
+   */
+  private async isTrivialAlias(node: Node): Promise<boolean> {
+    if (node.kind !== 'type_alias') return false;
+    const code = await this.extractNodeCode(node);
+    if (!code) return false;
+    return isTrivialAliasBody(code);
   }
 
   /**
