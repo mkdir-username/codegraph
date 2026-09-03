@@ -330,6 +330,24 @@ export function formatStaleBanner(stale: PendingFile[]): string {
 }
 
 /**
+ * Whole-response banner for the window in which the index is still
+ * reconciling with disk. The per-file banner above only knows about watcher
+ * events; a reconcile started outside the watcher — `catchUpSync()` right
+ * after open, or any background `sync()` — leaves the pending set empty
+ * while every answer still describes the previous run's tree. Paths and
+ * symbols that no longer exist look exactly like real ones, so the risk is
+ * stated in full rather than hinted at.
+ */
+export function formatCatchUpBanner(): string {
+  return (
+    '\u26a0\ufe0f The index is catching up with the filesystem right now — this answer ' +
+    'may describe the previous state of the tree, including paths and symbols ' +
+    'that no longer exist.\nVerify anything you act on against disk (Read, ls), ' +
+    'or ask again once the sync settles.'
+  );
+}
+
+/**
  * Compact footer listing pending files that are NOT referenced in this
  * response. Gives the agent a complete project-wide freshness picture
  * without bloating the main banner.
@@ -945,7 +963,19 @@ export class ToolHandler {
     } catch {
       return result;
     }
-    if (pending.length === 0) return result;
+
+    // The index lock is the second freshness signal, and the only one that
+    // covers a reconcile the watcher never saw. It is held for the whole of
+    // sync() and indexAll(), so it is exactly true while answers can still
+    // come from the previous state of the tree.
+    let catchingUp = false;
+    try {
+      catchingUp = cg.isIndexing?.() ?? false;
+    } catch {
+      /* partial stub — treat as settled */
+    }
+
+    if (pending.length === 0 && !catchingUp) return result;
 
     const [first, ...rest] = result.content;
     if (!first || first.type !== 'text') return result;
@@ -969,9 +999,12 @@ export class ToolHandler {
     if (elsewhere.length > 0) {
       footer = formatStaleFooter(elsewhere);
     }
-    if (!banner && !footer) return result;
+    // Catch-up covers the whole answer, so it leads; a per-file banner still
+    // follows when the watcher has something more specific to say.
+    const catchUp = catchingUp ? formatCatchUpBanner() : '';
+    if (!catchUp && !banner && !footer) return result;
 
-    const composed = [banner, text, footer].filter(Boolean).join('\n\n');
+    const composed = [catchUp, banner, text, footer].filter(Boolean).join('\n\n');
     return { ...result, content: [{ type: 'text', text: composed }, ...rest] };
   }
 
