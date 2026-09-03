@@ -39,13 +39,36 @@ export function buildNode25BlockBanner(nodeVersion: string): string {
 }
 
 /**
- * Lowest supported Node.js major version. Matches the `engines` floor in
- * package.json. Below this, CodeGraph relies on language features / native APIs
- * that aren't present, and the combination is untested. `engines` alone only
- * *warns* on install (unless the user set `engine-strict`), so the CLI bootstrap
- * also hard-blocks here to actually enforce the floor.
+ * Lowest supported Node.js version. Matches the `engines` floor in package.json.
+ *
+ * The minor half is load-bearing, not decoration: `node:sqlite` only gained FTS5
+ * in 22.16, and CodeGraph's whole search layer is FTS5. On 22.14 — a version the
+ * old major-only floor waved through — the index opens, then every query dies
+ * with `no such module: fts5`, which names neither the cause nor the fix.
+ *
+ * `engines` alone only *warns* on install (unless the user set `engine-strict`),
+ * so the CLI bootstrap hard-blocks on {@link isNodeTooOld}, and the database
+ * adapter guards the paths that never touch the CLI.
  */
-export const MIN_NODE_MAJOR = 20;
+export const MIN_NODE_MAJOR = 22;
+export const MIN_NODE_MINOR = 16;
+
+/**
+ * True when the given `process.versions.node` string is below the supported
+ * floor. An unparseable version returns false: a runtime we cannot read is not
+ * evidence of an old runtime, and blocking on a guess would lock out a valid
+ * environment for a formatting quirk.
+ */
+export function isNodeTooOld(nodeVersion: string): boolean {
+  // Digit test rather than Number(): `Number('')` is 0, which would read an
+  // empty version as "ancient" and block a runtime we simply failed to parse.
+  const [rawMajor, rawMinor] = nodeVersion.split('.');
+  if (!rawMajor || !/^\d+$/.test(rawMajor)) return false;
+  const major = Number(rawMajor);
+  if (major !== MIN_NODE_MAJOR) return major < MIN_NODE_MAJOR;
+  if (!rawMinor || !/^\d+$/.test(rawMinor)) return false;
+  return Number(rawMinor) < MIN_NODE_MINOR;
+}
 
 /**
  * Build the bordered banner shown when CodeGraph detects a Node.js major below
@@ -61,9 +84,10 @@ export function buildNodeTooOldBanner(nodeVersion: string): string {
     sep,
     `[CodeGraph] Unsupported Node.js version: ${nodeVersion}`,
     sep,
-    `CodeGraph requires Node.js ${MIN_NODE_MAJOR} or newer. Older versions lack`,
-    'language features and native APIs CodeGraph depends on, and are not',
-    'tested or supported.',
+    `CodeGraph requires Node.js ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} or newer. Below that,`,
+    'the built-in node:sqlite ships without FTS5 — the module CodeGraph builds its',
+    'entire search index on. The index opens, then every query fails with',
+    '`no such module: fts5`, which points at neither the cause nor the fix.',
     '',
     'Fix: install Node.js 22 LTS:',
     '  nvm install 22 && nvm use 22                          # nvm',

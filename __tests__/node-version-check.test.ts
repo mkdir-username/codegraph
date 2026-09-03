@@ -7,7 +7,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { buildNode25BlockBanner, buildNodeTooOldBanner, MIN_NODE_MAJOR } from '../src/bin/node-version-check';
+import {
+  buildNode25BlockBanner,
+  buildNodeTooOldBanner,
+  isNodeTooOld,
+  MIN_NODE_MAJOR,
+  MIN_NODE_MINOR,
+} from '../src/bin/node-version-check';
 
 describe('buildNode25BlockBanner', () => {
   it('embeds the reported Node version in the header', () => {
@@ -49,11 +55,20 @@ describe('buildNodeTooOldBanner', () => {
     );
   });
 
-  it('states the supported floor matching MIN_NODE_MAJOR', () => {
-    expect(MIN_NODE_MAJOR).toBe(20);
+  it('states the supported floor matching the pinned minimum', () => {
+    expect(MIN_NODE_MAJOR).toBe(22);
+    expect(MIN_NODE_MINOR).toBe(16);
     expect(buildNodeTooOldBanner('18.0.0')).toContain(
-      `requires Node.js ${MIN_NODE_MAJOR} or newer`
+      `requires Node.js ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} or newer`
     );
+  });
+
+  it('names FTS5 as the reason for the floor', () => {
+    // The floor is not stylistic: below it `node:sqlite` ships without FTS5 and
+    // every search query dies with a message that explains nothing.
+    const banner = buildNodeTooOldBanner('22.14.0');
+    expect(banner).toContain('FTS5');
+    expect(banner).toContain('no such module: fts5');
   });
 
   it('points users to Node 22 LTS via nvm and Homebrew', () => {
@@ -65,5 +80,28 @@ describe('buildNodeTooOldBanner', () => {
 
   it('documents the CODEGRAPH_ALLOW_UNSAFE_NODE override', () => {
     expect(buildNodeTooOldBanner('18.0.0')).toContain('CODEGRAPH_ALLOW_UNSAFE_NODE=1');
+  });
+});
+
+describe('isNodeTooOld', () => {
+  it('rejects a version inside the old major range', () => {
+    expect(isNodeTooOld('20.11.0')).toBe(true);
+    expect(isNodeTooOld('18.20.0')).toBe(true);
+  });
+
+  it('rejects a 22.x below the FTS5 minor — the version that used to slip through', () => {
+    expect(isNodeTooOld('22.14.0')).toBe(true);
+    expect(isNodeTooOld('22.0.0')).toBe(true);
+  });
+
+  it('accepts the exact floor and anything above it', () => {
+    expect(isNodeTooOld('22.16.0')).toBe(false);
+    expect(isNodeTooOld('22.22.3')).toBe(false);
+    expect(isNodeTooOld('24.1.0')).toBe(false);
+  });
+
+  it('treats an unparseable version as supported rather than blocking on a guess', () => {
+    expect(isNodeTooOld('')).toBe(false);
+    expect(isNodeTooOld('not-a-version')).toBe(false);
   });
 });

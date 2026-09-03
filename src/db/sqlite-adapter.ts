@@ -6,9 +6,13 @@
  * is storage-agnostic.
  *
  * CodeGraph ships with a bundled Node runtime, so `node:sqlite` (real SQLite,
- * with WAL + FTS5) is always available — there is no native build step and no
- * wasm fallback. When run from source instead, it requires Node >= 22.5.
+ * with WAL + FTS5) is available there without a native build step or a wasm
+ * fallback. Run from source it is not a given: `node:sqlite` exists from 22.5
+ * but only carries FTS5 from 22.16, and CodeGraph's search layer is FTS5 —
+ * hence the guard in {@link createDatabase}.
  */
+
+import { buildNodeTooOldBanner, isNodeTooOld } from '../bin/node-version-check';
 
 export interface SqliteStatement {
   run(...params: any[]): { changes: number; lastInsertRowid: number | bigint };
@@ -125,14 +129,28 @@ class NodeSqliteAdapter implements SqliteDatabase {
  * a process-global would race.
  */
 export function createDatabase(dbPath: string): { db: SqliteDatabase; backend: SqliteBackend } {
+  // The CLI blocks an unsupported runtime at bootstrap, but it is not the only
+  // door in: the MCP server, the test suite and library callers construct a
+  // database directly. Opening succeeds on such a runtime and the failure only
+  // surfaces later as `no such module: fts5` on the first query, far from its
+  // cause — so state it here, where the version is the whole story.
+  if (isNodeTooOld(process.versions.node)) {
+    throw new Error(
+      `Node.js ${process.versions.node} is too old for CodeGraph: its built-in ` +
+      'node:sqlite has no FTS5, which the search index requires. Node 22.16 or ' +
+      'newer is needed.\n' +
+      buildNodeTooOldBanner(process.versions.node)
+    );
+  }
   try {
     return { db: new NodeSqliteAdapter(dbPath), backend: 'node-sqlite' };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     throw new Error(
       'Failed to open SQLite via the built-in node:sqlite module.\n' +
-      'CodeGraph requires node:sqlite (Node.js 22.5+). Install the self-contained\n' +
-      'CodeGraph release (it bundles a compatible Node), or run on Node 22.5+.\n' +
+      'CodeGraph requires node:sqlite with FTS5 (Node.js 22.16+). Install the\n' +
+      'self-contained CodeGraph release (it bundles a compatible Node), or run\n' +
+      'on Node 22.16+.\n' +
       `Underlying error: ${msg}`
     );
   }
