@@ -1070,6 +1070,24 @@ export class ExtractionOrchestrator {
       }
     }
 
+    // Deletions. A full re-index rewrites every file it finds, but a file that
+    // vanished since the previous run is in no phase above — its row and nodes
+    // survived, so the graph kept answering with paths that no longer exist and
+    // re-indexing, the obvious recovery, did not clear them. Same criterion as
+    // the reconcile in sync(): scan membership OR the filesystem, because
+    // scanDirectory (via `git ls-files`) still lists a file deleted from disk
+    // but not yet staged. An empty scan is treated as a broken scan rather than
+    // an emptied project — wiping the whole index on it would turn a transient
+    // failure into a full rebuild.
+    if (files.length > 0) {
+      const scanned = new Set(files);
+      for (const tracked of this.queries.getAllFiles()) {
+        if (!scanned.has(tracked.path) || !fs.existsSync(path.join(this.rootDir, tracked.path))) {
+          this.queries.deleteFile(tracked.path);
+        }
+      }
+    }
+
     // Shut down parse worker and clear any pending timers
     rejectAllPending('Indexing complete');
     if (parseWorker) {
