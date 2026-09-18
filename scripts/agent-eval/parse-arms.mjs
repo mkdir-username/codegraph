@@ -12,6 +12,7 @@
 //   C no-explore    hide explore         trace-first   (is explore redundant?)
 //   D trace-centric hide explore+context trace-first   (is the survey pair redundant?)
 //   E control-probe hide explore+context trace-first   (NON-flow Q — should degrade)
+//   J explore-only   hide all but explore no steering    (is one tool enough?)
 //
 // Usage: node scripts/agent-eval/parse-arms.mjs [/tmp/arms]
 import { readFileSync, readdirSync, existsSync, statSync } from 'fs';
@@ -59,7 +60,7 @@ for (const repo of readdirSync(ROOT)) {
   const rdir = join(ROOT, repo);
   if (!statSync(rdir).isDirectory()) continue;
   for (const f of readdirSync(rdir)) {
-    const m = f.match(/^([A-I])-r(\d+)\.jsonl$/); if (!m) continue;
+    const m = f.match(/^([A-J])-r(\d+)\.jsonl$/); if (!m) continue;
     const p = parse(join(rdir, f)); if (!p || !p.ok) continue;
     (((data[repo] ??= {})[m[1]]) ??= []).push(p);
   }
@@ -68,7 +69,7 @@ for (const repo of readdirSync(ROOT)) {
 const avg = (a, f) => a.length ? a.reduce((s, x) => s + (f(x) || 0), 0) / a.length : 0;
 const k = (n) => (n / 1000).toFixed(1);
 const pad = (s, n) => String(s).padEnd(n);
-const ARMS = ['A', 'H', 'I', 'B', 'F', 'G', 'C', 'D', 'E'];
+const ARMS = ['A', 'J', 'H', 'I', 'B', 'F', 'G', 'C', 'D', 'E'];
 const LABEL = { A: 'A all/none(old)', H: 'H body-trace/none', I: 'I bodytrace+dest', B: 'B all/steer(thin)', F: 'F all/steer(body)', G: 'G ported(noprompt)', C: 'C no-explore', D: 'D trace-centric', E: 'E nonflow-probe' };
 
 // ---- per repo × arm ----

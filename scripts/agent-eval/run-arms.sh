@@ -13,10 +13,11 @@
 #   C no-explore    hide explore         trace-first
 #   D trace-centric hide explore+context trace-first
 #   E control-probe hide explore+context trace-first  (caller passes a NON-flow Q)
+#   J explore-only  hide all but explore no steering   (upstream's DEFAULT_MCP_TOOLS bet)
 #
-# Usage: run-arms.sh <repo-path> "<question>" <A|B|C|D|E> [run-id]
+# Usage: run-arms.sh <repo-path> "<question>" <A|B|C|D|E|J> [run-id]
 set -uo pipefail
-REPO="${1:?repo path}"; Q="${2:?question}"; ARM="${3:?arm A-E}"; RID="${4:-1}"
+REPO="${1:?repo path}"; Q="${2:?question}"; ARM="${3:?arm A-J}"; RID="${4:-1}"
 CG_BIN="${CG_BIN:-$(command -v codegraph)}"
 OUT="${ARMS_OUT:-/tmp/arms}/$(basename "$REPO")"
 mkdir -p "$OUT"
@@ -26,23 +27,29 @@ mkdir -p "$OUT"
 STEER='Flow questions ("how does X reach/become Y", "trace the flow", request to handler, state to render): call codegraph_trace(from,to) FIRST — one call returns the whole path. Use codegraph_context/search only to locate the two endpoint symbols if you do not know them. Do NOT reconstruct the path with repeated search/callers/explore.'
 KEEP_NO_EXPLORE="trace,search,node,context,callers,callees,impact,files,status"
 KEEP_TRACE_CENTRIC="trace,search,node,callers,callees,impact,files,status"
+KEEP_EXPLORE_ONLY="explore"
 
 case "$ARM" in
   A|G|H|I) TOOLS="";            STEERING="" ;;  # no steering; H = body-trace, I = body-trace + destination callees (sufficiency)
   B|F) TOOLS="";                STEERING="$STEER" ;;  # F = B's surface, run on the body-inlining trace build
   C) TOOLS="$KEEP_NO_EXPLORE";  STEERING="$STEER" ;;
   D|E) TOOLS="$KEEP_TRACE_CENTRIC"; STEERING="$STEER" ;;
-  *) echo "bad arm '$ARM' (want A|B|C|D|E)"; exit 1 ;;
+  J) TOOLS="$KEEP_EXPLORE_ONLY"; STEERING="" ;;  # compares head-to-head with A
+  *) echo "bad arm '$ARM' (want A|B|C|D|E|J)"; exit 1 ;;
 esac
 
+# CODEGRAPH_NO_DAEMON is not optional here: with a daemon alive, `serve --mcp`
+# degrades to a proxy and ListTools is computed inside the daemon, with the env
+# of ITS first start — the allowlist is then silently ignored and every arm gets
+# the full surface. Set on BOTH arms so the daemon is never the variable.
 CFG="$OUT/mcp-$ARM.json"
 if [ -n "$TOOLS" ]; then
   cat > "$CFG" <<JSON
-{"mcpServers":{"codegraph":{"command":"$CG_BIN","args":["serve","--mcp","--path","$REPO"],"env":{"CODEGRAPH_MCP_TOOLS":"$TOOLS"}}}}
+{"mcpServers":{"codegraph":{"command":"$CG_BIN","args":["serve","--mcp","--path","$REPO"],"env":{"CODEGRAPH_MCP_TOOLS":"$TOOLS","CODEGRAPH_NO_DAEMON":"1"}}}}
 JSON
 else
   cat > "$CFG" <<JSON
-{"mcpServers":{"codegraph":{"command":"$CG_BIN","args":["serve","--mcp","--path","$REPO"]}}}
+{"mcpServers":{"codegraph":{"command":"$CG_BIN","args":["serve","--mcp","--path","$REPO"],"env":{"CODEGRAPH_NO_DAEMON":"1"}}}}
 JSON
 fi
 
