@@ -21,6 +21,12 @@ import {
 
 function gitInit(dir: string): void {
   execFileSync('git', ['init', '-q'], { cwd: dir, stdio: 'ignore' });
+  // A global core.hooksPath would send every write below into the developer's
+  // own hooks directory instead of this temp repo (issue: EPERM on ~/.claude).
+  execFileSync('git', ['config', '--local', 'core.hooksPath', '.git/hooks'], {
+    cwd: dir,
+    stdio: 'ignore',
+  });
 }
 
 function isExecutable(file: string): boolean {
