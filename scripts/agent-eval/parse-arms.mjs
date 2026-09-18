@@ -29,7 +29,7 @@ function parse(file) {
     let ev; try { ev = JSON.parse(l); } catch { continue; }
     if (ev.type === 'system' && ev.subtype === 'init') initCg = (ev.tools || []).filter(t => /codegraph/.test(t)).length;
     if (ev.type === 'assistant') for (const b of (ev.message?.content || [])) if (b.type === 'tool_use')
-      calls.push({ id: b.id, name: b.name, out: 0 });
+      calls.push({ id: b.id, name: b.name, out: 0, cmd: String(b.input?.command ?? '') });
     if (ev.type === 'user') for (const b of (ev.message?.content || [])) if (b.type === 'tool_result') {
       const c = b.content;
       const txt = typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x?.text || '').join('') : '';
@@ -38,10 +38,15 @@ function parse(file) {
     if (ev.type === 'result') result = ev;
   }
   const cg = calls.filter(c => c.name.includes('codegraph'));
+  // Under --permission-mode bypassPermissions the agent reads files with Bash
+  // (cat/sed/head/grep), never the Read tool — counting only Read/Grep scores a
+  // full manual read-through as "0 reads" and inverts the arm comparison.
+  const BASH_READ = /\b(cat|sed|head|tail|less|awk)\b|\b(grep|rg|ag|ack)\b|\bls\b|\bfind\b|\bwc\b/;
   return {
     initCg,
     reads: calls.filter(c => c.name === 'Read').length,
     greps: calls.filter(c => c.name === 'Grep').length + calls.filter(c => c.name === 'Glob').length,
+    bashRd: calls.filter(c => c.name === 'Bash' && BASH_READ.test(c.cmd)).length,
     cgCalls: cg.length,
     cgSeq: cg.map(c => cgShort(c.name)),
     cgOut: cg.reduce((s, c) => s + c.out, 0),
@@ -70,11 +75,11 @@ const avg = (a, f) => a.length ? a.reduce((s, x) => s + (f(x) || 0), 0) / a.leng
 const k = (n) => (n / 1000).toFixed(1);
 const pad = (s, n) => String(s).padEnd(n);
 const ARMS = ['A', 'J', 'H', 'I', 'B', 'F', 'G', 'C', 'D', 'E'];
-const LABEL = { A: 'A all/none(old)', H: 'H body-trace/none', I: 'I bodytrace+dest', B: 'B all/steer(thin)', F: 'F all/steer(body)', G: 'G ported(noprompt)', C: 'C no-explore', D: 'D trace-centric', E: 'E nonflow-probe' };
+const LABEL = { A: 'A all/none(old)', J: 'J explore-only', H: 'H body-trace/none', I: 'I bodytrace+dest', B: 'B all/steer(thin)', F: 'F all/steer(body)', G: 'G ported(noprompt)', C: 'C no-explore', D: 'D trace-centric', E: 'E nonflow-probe' };
 
 // ---- per repo × arm ----
 console.log('\n=== PER REPO × ARM (avg over runs) ===');
-console.log(pad('repo', 22), pad('arm', 16), 'tools', 'trace', pad('reads', 6), pad('cgOutK', 7), pad('turns', 6), 'dur');
+console.log(pad('repo', 22), pad('arm', 16), 'tools', 'trace', pad('reads', 6), pad('bashRd', 7), pad('cgOutK', 7), pad('turns', 6), 'dur');
 for (const repo of Object.keys(data).sort()) {
   for (const arm of ARMS) {
     const runs = data[repo][arm]; if (!runs?.length) continue;
@@ -83,6 +88,7 @@ for (const repo of Object.keys(data).sort()) {
       pad(runs[0].initCg, 5),
       pad(runs.filter(r => r.traceUsed).length + '/' + runs.length, 5),
       pad(avg(runs, r => r.reads).toFixed(1), 6),
+      pad(avg(runs, r => r.bashRd).toFixed(1), 7),
       pad(k(avg(runs, r => r.cgOut)), 7),
       pad(avg(runs, r => r.turns).toFixed(1), 6),
       avg(runs, r => r.dur).toFixed(0) + 's',
@@ -92,7 +98,7 @@ for (const repo of Object.keys(data).sort()) {
 
 // ---- aggregate per arm (flow arms A–D over the flow repos; E shown apart) ----
 console.log('\n=== AGGREGATE PER ARM (mean across repos) ===');
-console.log(pad('arm', 16), pad('adoption', 9), pad('reads', 7), pad('greps', 7), pad('cgOutK', 8), pad('turns', 7), pad('dur', 6), 'cost');
+console.log(pad('arm', 16), pad('adoption', 9), pad('reads', 7), pad('greps', 7), pad('bashRd', 7), pad('cgOutK', 8), pad('turns', 7), pad('dur', 6), 'cost');
 for (const arm of ARMS) {
   const all = [];
   for (const repo of Object.keys(data)) for (const r of (data[repo][arm] || [])) all.push({ ...r, repo });
@@ -104,6 +110,7 @@ for (const arm of ARMS) {
     pad(`${adopt}/${all.length}`, 9),
     pad(avg(all, r => r.reads).toFixed(2), 7),
     pad(avg(all, r => r.greps).toFixed(2), 7),
+    pad(avg(all, r => r.bashRd).toFixed(2), 7),
     pad(k(avg(all, r => r.cgOut)), 8),
     pad(avg(all, r => r.turns).toFixed(1), 7),
     pad(avg(all, r => r.dur).toFixed(0) + 's', 6),
