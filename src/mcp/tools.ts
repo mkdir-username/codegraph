@@ -200,6 +200,49 @@ export function isGeneratedExplorePath(filePath: string): boolean {
 }
 
 /**
+ * What `codegraph_callers` / `codegraph_callees` answers when the symbol is
+ * indexed but has no edge in that direction. A bare "No callers found" reads
+ * as a failure, so the agent falls back to reading files — measured at 54% of
+ * all callers calls in one local transcript corpus. An empty edge set is an
+ * answer: the definition site, why an indexed symbol can have none, and the
+ * codegraph call that continues the investigation.
+ */
+export function buildNoEdgeGuidance(
+  symbol: string,
+  nodes: Node[],
+  direction: 'callers' | 'callees',
+): string {
+  const sites = nodes
+    .slice(0, 5)
+    .map((n) => `- ${n.name} (${n.kind}) - ${n.filePath}:${n.startLine}`)
+    .join('\n');
+  const more = nodes.length > 5 ? `\n- …and ${nodes.length - 5} more definitions` : '';
+
+  const why = direction === 'callers'
+    ? 'Nothing in the index calls it. Usual reasons: it is an entry point (CLI, route ' +
+      'handler, test-only helper, public API); it is reached dynamically — a callback, ' +
+      'an event name, DI, a string dispatch table — and that channel has no synthesizer ' +
+      'yet; or the caller was edited after the last sync.'
+    : 'It calls nothing the index tracks. Usual reasons: the body only touches ' +
+      'built-ins or third-party packages outside the indexed tree; the work happens ' +
+      'through a callback or an event it hands off; or it is a declaration, a type or ' +
+      'a constant rather than a body.';
+
+  const next = direction === 'callers'
+    ? `Continue inside codegraph: codegraph_explore { query: "${symbol}" } for the ` +
+      `surrounding source and its neighbours, or codegraph_impact { symbol: "${symbol}" } ` +
+      'for what a change there would reach.'
+    : `Continue inside codegraph: codegraph_explore { query: "${symbol}" } for the body ` +
+      `as written, or codegraph_trace from "${symbol}" toward the symbol you expect it to reach.`;
+
+  return (
+    `No ${direction} found for "${symbol}" — the symbol IS indexed ` +
+    `(${nodes.length} definition${nodes.length === 1 ? '' : 's'}):\n${sites}${more}\n\n` +
+    `${why}\n\n${next}`
+  );
+}
+
+/**
  * The trailing "Explore budget" note for `codegraph_explore`. The per-call
  * file coverage must reflect the tier's real `defaultMaxFiles` (10/12/14),
  * not a stale literal — a too-low "~6 files" made the agent think it had
@@ -1199,7 +1242,7 @@ export class ToolHandler {
     }
 
     if (allCallers.length === 0) {
-      return this.textResult(`No callers found for "${symbol}"${allMatches.note}`);
+      return this.textResult(buildNoEdgeGuidance(symbol, allMatches.nodes, 'callers') + allMatches.note);
     }
 
     const formatted = this.formatNodeList(allCallers.slice(0, limit), `Callers of ${symbol}`) + allMatches.note;
@@ -1234,7 +1277,7 @@ export class ToolHandler {
     }
 
     if (allCallees.length === 0) {
-      return this.textResult(`No callees found for "${symbol}"${allMatches.note}`);
+      return this.textResult(buildNoEdgeGuidance(symbol, allMatches.nodes, 'callees') + allMatches.note);
     }
 
     const formatted = this.formatNodeList(allCallees.slice(0, limit), `Callees of ${symbol}`) + allMatches.note;
