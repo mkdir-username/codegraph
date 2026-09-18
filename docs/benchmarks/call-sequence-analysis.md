@@ -4,6 +4,22 @@
 stream-json logs from the A/B matrix (`/tmp/ab-matrix/<Cell>/run-headless-{with,without}.jsonl`,
 37 cells × 2 arms). Re-mined — **no re-runs** — with `scripts/agent-eval/seq-matrix.mjs`.
 
+## Measuring your own machine
+
+The numbers below come from a controlled A/B. To see what codegraph does in **your** day-to-day
+sessions instead, mine Claude Code's own transcripts:
+
+```bash
+node scripts/agent-eval/transcript-usage.mjs --days 30
+```
+
+It reports, per tool: calls, how many answers were empty or an error, and what the agent reached for
+NEXT — a `Read` right after a codegraph call means the answer was not sufficient, which is the number
+to drive down. One trap it avoids, and you should too: **do not `grep` the transcripts for
+`mcp__codegraph__`.** Tool *schemas* carry that string as well, which overcounted by roughly 300×
+on one machine (36k grep hits against 120 real calls). Only `tool_use` blocks inside
+`message.content` are calls.
+
 ## Why this exists
 
 The [A/B matrix](codegraph-ab-matrix.md) showed codegraph cuts **reads 75%** but **wall-clock only
