@@ -526,6 +526,8 @@ describe('SDUI Framework Resolver', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
+    // init + indexAll + sync against real SQLite: ~0.9s on a quiet machine, but
+    // it overran vitest's 5s default whenever another suite ran alongside it.
     it('detects SDUI after sync when screens are added post-init', async () => {
       const { CodeGraph } = await import('../src/index');
       const cg = await CodeGraph.init(tmpDir);
@@ -564,7 +566,7 @@ describe('SDUI Framework Resolver', () => {
       } finally {
         cg.close();
       }
-    });
+    }, 20_000);
   });
 
   describe('integration — full pipeline', () => {
