@@ -49,6 +49,8 @@ Use codegraph for **structural** questions — what calls what, what would break
 - **Don't grep first** when looking up a symbol by name. \`codegraph_search\` is faster and returns kind + location + signature in one call.
 - **Don't chain \`codegraph_search\` + \`codegraph_node\`** when you just want context — \`codegraph_context\` is one call.
 - **Don't loop \`codegraph_node\` over many symbols** — one \`codegraph_explore\` call returns several symbols' source grouped in a single capped call, while each separate node/Read call re-reads the whole context and costs far more.
+- **An empty \`codegraph_callers\` / \`codegraph_callees\` is an ANSWER, not a failure.** The response names every definition site and why nothing points at it (entry point, reached dynamically, caller edited since the last sync), and suggests the codegraph call that continues the investigation. Don't grep or Read to confirm the absence.
+- **Project errors carry their own fix.** "No CodeGraph project is loaded" lists the indexed projects visible from the directory it searched — retry with one of them as \`projectPath\`. "CodeGraph not initialized in X" prints the \`codegraph init <path>\` command to run; it only reads the code, takes about two seconds for a 200-file project, and the server picks the index up on the next call.
 - **Index lag — check the staleness banner, don't guess a wait.** When a codegraph response starts with "⚠️ Some files referenced below were edited since the last index sync…", the listed files are pending re-index — Read those specific files for accurate content. Files NOT in that banner are fresh and codegraph is authoritative for them. \`codegraph_status\` also lists pending files under "Pending sync".
 
 ### If \`.codegraph/\` doesn't exist

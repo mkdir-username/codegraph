@@ -60,6 +60,8 @@ of calls; a grep/read exploration is dozens.
 - **Don't grep first** when looking up a symbol by name — \`codegraph_search\` is faster and returns kind + location + signature.
 - **Don't chain \`codegraph_search\` + \`codegraph_node\`** when you just want context — \`codegraph_context\` is one round-trip.
 - **Don't loop \`codegraph_node\` over many symbols** — one \`codegraph_explore\` call returns them all grouped by file, while each separate call re-reads the whole context and costs far more. Use \`codegraph_node\` for a single symbol.
+- **An empty \`codegraph_callers\` / \`codegraph_callees\` is an ANSWER, not a failure.** When nothing points at an indexed symbol the response says so, names every definition site, and gives the reasons (entry point, reached dynamically, caller edited since the last sync). Continue with the codegraph call it suggests — do NOT fall back to grep or Read to double-check the absence.
+- **If a tool says no project is loaded, read the list it prints.** The error names the indexed projects visible from the directory it searched; retry the same call with one of them as \`projectPath\`. If it says a project is not initialized, the fix is the \`codegraph init <path>\` line in the message — indexing only reads the code and takes about two seconds for a 200-file project, and the running server picks the new index up on the next call.
 - **After editing, check the staleness banner.** When a tool response starts with "⚠️ Some files referenced below were edited since the last index sync…", the listed files are pending re-index — Read those specific files for accurate content. Every file NOT in that banner is fresh, so still trust codegraph. \`codegraph_status\` also lists pending files under "Pending sync".
 
 ## Limitations
