@@ -4,7 +4,7 @@
  * Defines the tools exposed by the CodeGraph MCP server.
  */
 
-import CodeGraph, { findNearestCodeGraphRoot } from '../index';
+import CodeGraph, { findNearestCodeGraphRoot, findIndexedProjectsNear } from '../index';
 import {
   detectWorktreeIndexMismatch,
   worktreeMismatchWarning,
@@ -751,6 +751,11 @@ export class ToolHandler {
     if (!projectPath) {
       if (!this.cg) {
         const searched = this.defaultProjectHint ?? process.cwd();
+        const nearby = findIndexedProjectsNear(searched);
+        const nearbyNote = nearby.length > 0
+          ? '\nIndexed projects are visible from there — retry with one of them as projectPath:\n' +
+            nearby.map((p) => `  • ${p}`).join('\n')
+          : '';
         throw new Error(
           'No CodeGraph project is loaded for this session.\n' +
           `Searched for a .codegraph/ directory starting from: ${searched}\n` +
@@ -758,7 +763,8 @@ export class ToolHandler {
           "the MCP client launched the server outside your project and didn't report the " +
           'workspace root. Fix it either way:\n' +
           '  • Pass projectPath to the tool call, e.g. projectPath: "/absolute/path/to/your/project"\n' +
-          '  • Or add --path to the server\'s MCP config args: ["serve", "--mcp", "--path", "/absolute/path/to/your/project"]'
+          '  • Or add --path to the server\'s MCP config args: ["serve", "--mcp", "--path", "/absolute/path/to/your/project"]' +
+          nearbyNote
         );
       }
       return this.cg;
@@ -785,7 +791,13 @@ export class ToolHandler {
     const resolvedRoot = findNearestCodeGraphRoot(projectPath);
 
     if (!resolvedRoot) {
-      throw new Error(`CodeGraph not initialized in ${projectPath}. Run 'codegraph init' in that project first.`);
+      throw new Error(
+        `CodeGraph not initialized in ${projectPath}.\n` +
+        'Index it and retry — it reads your code without changing it, and it is quick ' +
+        '(a 200-file project takes about two seconds):\n' +
+        `  codegraph init ${projectPath}\n` +
+        'Nothing else is needed afterwards: this server picks the new index up on the next call.'
+      );
     }
 
     // If the path resolves to the default project, reuse the already-open

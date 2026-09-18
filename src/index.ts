@@ -55,6 +55,7 @@ export {
   getCodeGraphDir,
   isInitialized,
   findNearestCodeGraphRoot,
+  findIndexedProjectsNear,
   CODEGRAPH_DIR,
 } from './directory';
 export { IndexProgress, IndexResult, SyncResult } from './extraction';

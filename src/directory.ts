@@ -258,3 +258,45 @@ export function validateDirectory(projectRoot: string): {
     errors,
   };
 }
+
+/**
+ * Indexed projects reachable from `startDir`.
+ *
+ * "No CodeGraph project is loaded" is only actionable if the caller knows which
+ * paths exist — but an error path must never turn into a disk crawl, so the walk
+ * is bounded three ways (depth, result count, wall-clock) and never descends
+ * into a project once it has found one.
+ */
+export function findIndexedProjectsNear(
+  startDir: string,
+  opts: { maxDepth?: number; maxResults?: number; budgetMs?: number } = {},
+): string[] {
+  const maxDepth = opts.maxDepth ?? 3;
+  const maxResults = opts.maxResults ?? 10;
+  const deadline = Date.now() + (opts.budgetMs ?? 300);
+  const found: string[] = [];
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: path.resolve(startDir), depth: 0 }];
+
+  while (queue.length > 0 && found.length < maxResults && Date.now() < deadline) {
+    const { dir, depth } = queue.shift()!;
+    if (isInitialized(dir)) {
+      found.push(dir);
+      continue;
+    }
+    if (depth >= maxDepth) continue;
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+      queue.push({ dir: path.join(dir, entry.name), depth: depth + 1 });
+    }
+  }
+
+  return found;
+}
