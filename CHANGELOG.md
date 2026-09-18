@@ -10,6 +10,7 @@ and adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- **`codegraph callers` / `codegraph callees` on the command line answer the same way the MCP tools do.** The CLI printed its own bare `No callers found for "X"`, so the two surfaces disagreed about what an empty edge set means. Both now share one wording, phrased for whichever surface asked — the CLI is pointed at `codegraph context` and `codegraph query` rather than at MCP tool names.
 - **`codegraph_callers` / `codegraph_callees` answer when nothing points at a symbol, instead of dead-ending.** A symbol that is indexed but has no edge in the asked direction used to come back as a bare `No callers found for "X"`, which reads as a failure — and an agent that reads a failure goes back to reading files. The answer now names every definition site (`src/a.ts:12`), says why an indexed symbol can have no callers (entry point, reached dynamically through a callback or dispatch table with no synthesizer yet, caller edited since the last sync), and points at the codegraph call that continues the investigation.
 
 ### Fixed

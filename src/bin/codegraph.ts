@@ -26,6 +26,7 @@ import { Command } from 'commander';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getCodeGraphDir, isInitialized } from '../directory';
+import { buildNoEdgeGuidance } from '../graph/no-edge-guidance';
 import { detectWorktreeIndexMismatch, worktreeMismatchWarning } from '../sync/worktree';
 import { createShimmerProgress } from '../ui/shimmer-progress';
 import { getGlyphs } from '../ui/glyphs';
@@ -1281,7 +1282,11 @@ program
       if (options.json) {
         console.log(JSON.stringify({ symbol, callers: limited }, null, 2));
       } else if (limited.length === 0) {
-        info(`No callers found for "${symbol}"`);
+        const exact = matches
+          .filter((m) => m.node.name === symbol || m.node.name.endsWith(`.${symbol}`) || m.node.name.endsWith(`::${symbol}`))
+          .map((m) => m.node);
+        const defs = exact.length > 0 ? exact : [matches[0]!.node];
+        info(buildNoEdgeGuidance(symbol, defs, 'callers', 'cli'));
       } else {
         console.log(chalk.bold(`\nCallers of "${symbol}" (${limited.length}):\n`));
         for (const node of limited) {
@@ -1359,7 +1364,11 @@ program
       if (options.json) {
         console.log(JSON.stringify({ symbol, callees: limited }, null, 2));
       } else if (limited.length === 0) {
-        info(`No callees found for "${symbol}"`);
+        const exact = matches
+          .filter((m) => m.node.name === symbol || m.node.name.endsWith(`.${symbol}`) || m.node.name.endsWith(`::${symbol}`))
+          .map((m) => m.node);
+        const defs = exact.length > 0 ? exact : [matches[0]!.node];
+        info(buildNoEdgeGuidance(symbol, defs, 'callees', 'cli'));
       } else {
         console.log(chalk.bold(`\nCallees of "${symbol}" (${limited.length}):\n`));
         for (const node of limited) {
