@@ -1452,20 +1452,23 @@ export class ExtractionOrchestrator {
 
     // Index changed files
     const total = filesToIndex.length;
-    for (let i = 0; i < filesToIndex.length; i++) {
-      const filePath = filesToIndex[i]!;
-      onProgress?.({
-        phase: 'parsing',
-        current: i + 1,
-        total,
-        currentFile: filePath,
-      });
+    try {
+      for (let i = 0; i < filesToIndex.length; i++) {
+        const filePath = filesToIndex[i]!;
+        onProgress?.({
+          phase: 'parsing',
+          current: i + 1,
+          total,
+          currentFile: filePath,
+        });
 
-      const result = await this.indexFile(filePath);
-      nodesUpdated += result.nodes.length;
+        const result = await this.indexFile(filePath);
+        nodesUpdated += result.nodes.length;
+      }
+    } finally {
+      // Files indexed before a failure already lost their incoming edges.
+      this.queries.restoreIncomingEdges(incoming);
     }
-
-    this.queries.restoreIncomingEdges(incoming);
 
     return {
       filesChecked,

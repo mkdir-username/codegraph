@@ -6,13 +6,14 @@
  * Claude Code hooks integration.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { execFileSync } from 'child_process';
 import CodeGraph from '../src/index';
 import { DatabaseConnection, getDatabasePath } from '../src/db';
+import { ExtractionOrchestrator } from '../src/extraction';
 
 describe('Sync Module', () => {
   describe('Sync Functionality', () => {
@@ -341,6 +342,37 @@ describe('sync keeps edges from untouched files into rewritten ones', () => {
       '// moved down\n\nexport function shared() { return 2; }\n',
     );
     await cg.sync();
+    expect(callersOf('shared')).toEqual(before);
+  });
+
+  it('restore survives a file that fails to index', async () => {
+    const before = callersOf('shared');
+    fs.writeFileSync(path.join(dir, 'src', 'a.ts'), '// moved down\n\nexport function shared() { return 2; }\n');
+    fs.writeFileSync(path.join(dir, 'src', 'z.ts'), 'export const z = 1;\n');
+    const original = ExtractionOrchestrator.prototype.indexFile;
+    let aIndexed = false;
+    let threw = false;
+    // Fail only AFTER a.ts was rewritten, whatever order the scan yields.
+    const spy = vi.spyOn(ExtractionOrchestrator.prototype, 'indexFile').mockImplementation(
+      async function (this: ExtractionOrchestrator, p: string) {
+        if (p === 'src/a.ts') {
+          const r = await original.call(this, p);
+          aIndexed = true;
+          return r;
+        }
+        if (aIndexed) {
+          threw = true;
+          throw new Error('parse exploded');
+        }
+        return original.call(this, p);
+      },
+    );
+    try {
+      await expect(cg.sync()).rejects.toThrow('parse exploded');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(threw).toBe(true);
     expect(callersOf('shared')).toEqual(before);
   });
 
