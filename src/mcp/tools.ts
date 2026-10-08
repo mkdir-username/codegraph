@@ -7,10 +7,15 @@
 import CodeGraph, { findNearestCodeGraphRoot, findIndexedProjectsNear } from '../index';
 import {
   detectWorktreeIndexMismatch,
+  findIndexedSiblingWorktree,
+  gitWorktreeRoot,
   worktreeMismatchWarning,
   worktreeMismatchNotice,
   type WorktreeIndexMismatch,
 } from '../sync/worktree';
+import { seedWorktreeIndex } from '../sync/worktree-seed';
+import { getCodeGraphDir, isInitialized } from '../directory';
+import { logWarn } from '../errors';
 import type { PendingFile } from '../sync';
 import type { Node, Edge, SearchResult, Subgraph, TaskContext, NodeKind } from '../types';
 import { createHash } from 'crypto';
@@ -21,6 +26,7 @@ import {
   lstatSync,
   openSync,
   readFileSync,
+  rmSync,
   writeSync,
 } from 'fs';
 import { buildNoEdgeGuidance } from '../graph/no-edge-guidance';
@@ -642,6 +648,14 @@ export const tools: ToolDefinition[] = [
   },
 ];
 
+/** The seeded copy could not be synced because another process holds the index lock. */
+class SeedLockBusyError extends Error {
+  constructor(root: string) {
+    super(`sync did not run for ${root}: index lock is held`);
+    this.name = 'SeedLockBusyError';
+  }
+}
+
 /**
  * Tool handler that executes tools against a CodeGraph instance
  *
@@ -660,6 +674,12 @@ export class ToolHandler {
   // once and every later tool call reuses the result — never shelling out to
   // git on the hot path. `undefined` = not computed yet; `null` = no mismatch.
   private worktreeMismatchCache: Map<string, WorktreeIndexMismatch | null> = new Map();
+  // startPath → worktree root seeded for it (null = nothing to seed). The check
+  // spawns git, so it runs once per path and stays off the hot path (#155).
+  private worktreeSeedCache: Map<string, string | null> = new Map();
+  // Seeds in flight by worktree root: parallel calls from several agents share
+  // one copy + sync instead of each racing to build its own.
+  private worktreeSeeds: Map<string, Promise<void>> = new Map();
 
   constructor(private cg: CodeGraph | null) {}
 
@@ -910,6 +930,79 @@ export class ToolHandler {
   }
 
   /**
+   * Give a git worktree with no index of its own a copy of an indexed
+   * sibling's, reconciled by sync(), before the tool resolves its project.
+   * Without this a sibling worktree answers "not initialized" and a nested one
+   * silently borrows the main checkout's index. Any failure falls back to that
+   * old behavior rather than failing the tool call. `knownRoot` skips the
+   * rev-parse when the caller already resolved the working tree.
+   */
+  private async ensureWorktreeIndex(startPath: string, knownRoot?: string): Promise<string | null> {
+    if (process.env.CODEGRAPH_WORKTREE_SEED === '0') return null;
+    const cached = this.worktreeSeedCache.get(startPath);
+    if (cached !== undefined) return cached;
+
+    let seeded: string | null = null;
+    let retryLater = false;
+    try {
+      const root = knownRoot ?? (existsSync(startPath) ? gitWorktreeRoot(startPath) : null);
+      if (root) {
+        let pending = this.worktreeSeeds.get(root);
+        if (!pending && !isInitialized(root)) {
+          const sibling = findIndexedSiblingWorktree(root);
+          if (sibling) {
+            pending = this.seedWorktreeFrom(sibling, root)
+              .finally(() => this.worktreeSeeds.delete(root));
+            this.worktreeSeeds.set(root, pending);
+          }
+        }
+        if (pending) {
+          await pending;
+          seeded = root;
+          // The seeded root IS its own working tree — no mismatch, no git spawn.
+          this.worktreeMismatchCache.set(root, null);
+        }
+      }
+    } catch (err) {
+      // A held lock is transient — let the next call try again.
+      retryLater = err instanceof SeedLockBusyError;
+      logWarn('Worktree index seeding failed', {
+        startPath,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    if (!retryLater) this.worktreeSeedCache.set(startPath, seeded);
+    return seeded;
+  }
+
+  private async seedWorktreeFrom(sibling: string, root: string): Promise<void> {
+    const published = seedWorktreeIndex(this.getCodeGraph(sibling), root);
+    const cg = this.getCodeGraph(root);
+    try {
+      const res = await cg.sync();
+      // sync() reports all zeros when another process holds the index lock. A
+      // tree with no supported source files reads the same and is discarded
+      // too — there is nothing for an index of it to answer.
+      if (res.filesChecked === 0) throw new SeedLockBusyError(root);
+    } catch (err) {
+      if (published) this.discardSeed(root, cg);
+      throw err;
+    }
+  }
+
+  /** Drop a copy that never got synced: it holds the sibling's branch, not this tree. */
+  private discardSeed(root: string, cg: CodeGraph): void {
+    try { cg.close(); } catch { /* already closed */ }
+    for (const [key, value] of this.projectCache) {
+      if (value === cg) this.projectCache.delete(key);
+    }
+    const dir = getCodeGraphDir(root);
+    for (const f of ['codegraph.db', 'codegraph.db-wal', 'codegraph.db-shm']) {
+      rmSync(join(dir, f), { force: true });
+    }
+  }
+
+  /**
    * Prefix a successful read-tool result with a compact worktree-mismatch
    * notice when the resolved index belongs to a different git working tree than
    * the caller's (issue #155). Without this, an agent in a nested worktree
@@ -1050,6 +1143,13 @@ export class ToolHandler {
       if (args.pattern !== undefined) {
         const check = this.validateOptionalPath(args.pattern, 'pattern');
         if (typeof check === 'object' && check !== undefined) return check;
+      }
+
+      if (typeof args.projectPath === 'string') {
+        const seeded = await this.ensureWorktreeIndex(args.projectPath);
+        // Route through the canonical root so getCodeGraph reuses the seeded
+        // connection instead of opening a second one under a symlinked path.
+        if (seeded) args = { ...args, projectPath: seeded };
       }
 
       // Read tools resolve through a single result variable so cross-cutting

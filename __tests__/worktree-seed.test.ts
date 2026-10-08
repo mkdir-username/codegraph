@@ -11,6 +11,7 @@ import CodeGraph from '../src/index';
 import { findIndexedSiblingWorktree } from '../src/sync/worktree';
 import { seedWorktreeIndex } from '../src/sync/worktree-seed';
 import { DatabaseConnection, getDatabasePath } from '../src/db';
+import { ToolHandler } from '../src/mcp/tools';
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', args, { cwd, stdio: ['ignore', 'ignore', 'ignore'] });
@@ -180,5 +181,82 @@ describe('seedWorktreeIndex', () => {
     const before = graphShape(repo);
     seedWorktreeIndex(main, wt);
     expect(graphShape(repo)).toEqual(before);
+  });
+});
+
+describe('ToolHandler seeds a worktree on first call', () => {
+  let repo: string;
+  let parent: string;
+  let wt: string;
+  let nested: string;
+  let main: CodeGraph;
+  let handler: ToolHandler;
+
+  beforeEach(async () => {
+    repo = makeRepo();
+    parent = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-seed-wts-'));
+    wt = addDivergedWorktree(repo, parent);
+    nested = '';
+    main = CodeGraph.initSync(repo);
+    await main.indexAll();
+    handler = new ToolHandler(main);
+  });
+
+  afterEach(() => {
+    handler.closeAll();
+    try { main.close(); } catch { /* best effort */ }
+    for (const w of [wt, nested].filter(Boolean)) {
+      try { git(repo, 'worktree', 'remove', '--force', w); } catch { /* best effort */ }
+    }
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(parent, { recursive: true, force: true });
+  });
+
+  it('sibling worktree: answers from its own synced index', async () => {
+    const res = await handler.execute('codegraph_search', { query: 'worktreeOnly', projectPath: wt });
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0].text).toContain('worktreeOnly');
+    expect(CodeGraph.isInitialized(wt)).toBe(true);
+  });
+
+  it('sibling worktree: callers of a symbol in a changed file survive', async () => {
+    const res = await handler.execute('codegraph_callers', { symbol: 'shared', projectPath: wt });
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0].text).toContain('caller');
+  });
+
+  it('sibling worktree: symbols deleted in the worktree are gone', async () => {
+    const res = await handler.execute('codegraph_search', { query: 'mainOnly', projectPath: wt });
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0].text).not.toContain('gone.ts');
+  });
+
+  it('subdirectory projectPath seeds the worktree root', async () => {
+    const res = await handler.execute('codegraph_search', {
+      query: 'worktreeOnly', projectPath: path.join(wt, 'src'),
+    });
+    expect(res.isError).toBeFalsy();
+    expect(CodeGraph.isInitialized(wt)).toBe(true);
+    expect(fs.existsSync(path.join(wt, 'src', '.codegraph'))).toBe(false);
+  });
+
+  it('nested worktree: own index instead of the borrowed one, no #155 notice', async () => {
+    nested = addDivergedWorktree(repo, repo, 'nested');
+    const res = await handler.execute('codegraph_search', { query: 'worktreeOnly', projectPath: nested });
+    expect(res.content[0].text).toContain('worktreeOnly');
+    expect(res.content[0].text).not.toContain('different git worktree');
+    expect(CodeGraph.isInitialized(nested)).toBe(true);
+  });
+
+  it('no indexed sibling: keeps the "not initialized" error and writes nothing', async () => {
+    const lone = makeRepo();
+    try {
+      const res = await handler.execute('codegraph_search', { query: 'shared', projectPath: lone });
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain('CodeGraph not initialized');
+      expect(fs.existsSync(path.join(lone, '.codegraph'))).toBe(false);
+    } finally {
+      fs.rmSync(lone, { recursive: true, force: true });
+    }
   });
 });
