@@ -1145,8 +1145,20 @@ export class ToolHandler {
         if (typeof check === 'object' && check !== undefined) return check;
       }
 
+      let seedFrom: string | undefined;
+      let knownRoot: string | undefined;
       if (typeof args.projectPath === 'string') {
-        const seeded = await this.ensureWorktreeIndex(args.projectPath);
+        seedFrom = args.projectPath;
+      } else if (!this.cg) {
+        seedFrom = this.defaultProjectHint ?? undefined;
+      } else {
+        // Session started in a worktree nested inside the indexed checkout: the
+        // default project is that checkout's index, not this tree's.
+        knownRoot = this.worktreeMismatchFor()?.worktreeRoot;
+        seedFrom = knownRoot;
+      }
+      if (seedFrom) {
+        const seeded = await this.ensureWorktreeIndex(seedFrom, knownRoot);
         // Route through the canonical root so getCodeGraph reuses the seeded
         // connection instead of opening a second one under a symlinked path.
         if (seeded) args = { ...args, projectPath: seeded };

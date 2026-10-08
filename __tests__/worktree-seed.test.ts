@@ -248,6 +248,27 @@ describe('ToolHandler seeds a worktree on first call', () => {
     expect(CodeGraph.isInitialized(nested)).toBe(true);
   });
 
+  it('session in a sibling worktree: no projectPath, no default project', async () => {
+    const bare = new ToolHandler(null);
+    bare.setDefaultProjectHint(wt);
+    try {
+      const res = await bare.execute('codegraph_search', { query: 'worktreeOnly' });
+      expect(res.isError).toBeFalsy();
+      expect(res.content[0].text).toContain('worktreeOnly');
+    } finally {
+      bare.closeAll();
+    }
+  });
+
+  it('session in a nested worktree: default project is the main checkout', async () => {
+    nested = addDivergedWorktree(repo, repo, 'nested');
+    handler.setDefaultProjectHint(nested);
+    const res = await handler.execute('codegraph_search', { query: 'worktreeOnly' });
+    expect(res.isError).toBeFalsy();
+    expect(res.content[0].text).toContain('worktreeOnly');
+    expect(res.content[0].text).not.toContain('different git worktree');
+  });
+
   it('no indexed sibling: keeps the "not initialized" error and writes nothing', async () => {
     const lone = makeRepo();
     try {

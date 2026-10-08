@@ -118,6 +118,8 @@ describe('worktree mismatch surfaces on hot read tools (issue #155)', () => {
   let handler: ToolHandler;
 
   beforeEach(async () => {
+    // Seeding would replace the borrowed index; these pin the fallback notice.
+    process.env.CODEGRAPH_WORKTREE_SEED = '0';
     mainRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-wt-tool-'));
     git(mainRepo, 'init', '-q');
     git(mainRepo, 'config', 'user.email', 'test@example.com');
@@ -140,6 +142,7 @@ describe('worktree mismatch surfaces on hot read tools (issue #155)', () => {
   });
 
   afterEach(() => {
+    delete process.env.CODEGRAPH_WORKTREE_SEED;
     try { cg.destroy(); } catch { /* best effort */ }
     try { git(mainRepo, 'worktree', 'remove', '--force', worktree); } catch { /* best effort */ }
     fs.rmSync(mainRepo, { recursive: true, force: true });
