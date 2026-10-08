@@ -377,9 +377,22 @@ describe('sync keeps edges from untouched files into rewritten ones', () => {
   });
 
   it('edge is dropped when the callee is removed', async () => {
+    const callsIntoA = (): number => {
+      const conn = DatabaseConnection.open(getDatabasePath(dir));
+      try {
+        return (conn.getDb().prepare(
+          'SELECT count(*) AS n FROM edges e JOIN nodes s ON s.id = e.source JOIN nodes t ON t.id = e.target ' +
+          "WHERE s.name = 'caller' AND t.file_path = 'src/a.ts' AND e.kind = 'calls'",
+        ).get() as { n: number }).n;
+      } finally {
+        conn.close();
+      }
+    };
+    expect(callsIntoA()).toBe(1);
     fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'export function other() { return 3; }\n');
     await cg.sync();
     expect(cg.searchNodes('shared').filter((r) => r.node.name === 'shared')).toEqual([]);
+    expect(callsIntoA()).toBe(0);
   });
 
   /** Plant a synthesized caller→shared edge whose wiring site is `registeredAt`. */
