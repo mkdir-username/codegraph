@@ -309,6 +309,14 @@ export class CodeGraph {
     return this.projectRoot;
   }
 
+  /**
+   * Write a consistent copy of this index to `destPath`. VACUUM INTO runs as a
+   * single read transaction, so it is safe while the watcher is writing.
+   */
+  snapshotTo(destPath: string): void {
+    this.db.getDb().prepare('VACUUM INTO ?').run(destPath);
+  }
+
   // ===========================================================================
   // Indexing
   // ===========================================================================

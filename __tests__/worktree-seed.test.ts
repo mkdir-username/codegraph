@@ -9,6 +9,8 @@ import * as os from 'os';
 import * as path from 'path';
 import CodeGraph from '../src/index';
 import { findIndexedSiblingWorktree } from '../src/sync/worktree';
+import { seedWorktreeIndex } from '../src/sync/worktree-seed';
+import { DatabaseConnection, getDatabasePath } from '../src/db';
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', args, { cwd, stdio: ['ignore', 'ignore', 'ignore'] });
@@ -90,5 +92,93 @@ describe('findIndexedSiblingWorktree', () => {
 
   it('returns null outside git', () => {
     expect(findIndexedSiblingWorktree(parent)).toBeNull();
+  });
+});
+
+/** Order-independent fingerprint of a graph: nodes and edges by name, not id. */
+function graphShape(root: string): { nodes: string[]; edges: string[] } {
+  const conn = DatabaseConnection.open(getDatabasePath(root));
+  try {
+    const db = conn.getDb();
+    const nodes = (db.prepare(
+      "SELECT kind || ':' || name || ':' || file_path AS k FROM nodes ORDER BY k",
+    ).all() as Array<{ k: string }>).map((r) => r.k);
+    const edges = (db.prepare(
+      "SELECT e.kind || ':' || s.name || '>' || t.name AS k FROM edges e " +
+      'JOIN nodes s ON s.id = e.source JOIN nodes t ON t.id = e.target ORDER BY k',
+    ).all() as Array<{ k: string }>).map((r) => r.k);
+    return { nodes, edges };
+  } finally {
+    conn.close();
+  }
+}
+
+describe('seedWorktreeIndex', () => {
+  let repo: string;
+  let parent: string;
+  let wt: string;
+  let twin: string;
+  let main: CodeGraph;
+
+  beforeEach(async () => {
+    repo = makeRepo();
+    parent = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-seed-wts-'));
+    wt = addDivergedWorktree(repo, parent);
+    twin = '';
+    main = CodeGraph.initSync(repo);
+    await main.indexAll();
+  });
+
+  afterEach(() => {
+    try { main.close(); } catch { /* best effort */ }
+    for (const w of [wt, twin].filter(Boolean)) {
+      try { git(repo, 'worktree', 'remove', '--force', w); } catch { /* best effort */ }
+    }
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(parent, { recursive: true, force: true });
+  });
+
+  it('publishes a full codegraph.db and leaves no temp files', () => {
+    expect(seedWorktreeIndex(main, wt)).toBe(true);
+    const files = fs.readdirSync(path.join(wt, '.codegraph')).sort();
+    expect(files).toEqual(['.gitignore', 'codegraph.db']);
+    expect(CodeGraph.isInitialized(wt)).toBe(true);
+  });
+
+  it('is a no-op when the worktree already has an index', () => {
+    expect(seedWorktreeIndex(main, wt)).toBe(true);
+    expect(seedWorktreeIndex(main, wt)).toBe(false);
+  });
+
+  it('after sync equals a fresh index of the same tree', async () => {
+    seedWorktreeIndex(main, wt);
+    const seeded = CodeGraph.openSync(wt);
+    await seeded.sync();
+    seeded.close();
+
+    // Same content, indexed from scratch, in a second worktree.
+    twin = path.join(parent, 'twin');
+    git(repo, 'worktree', 'add', '-q', '--detach', twin, 'HEAD');
+    for (const f of ['a.ts', 'c.ts']) {
+      fs.copyFileSync(path.join(wt, 'src', f), path.join(twin, 'src', f));
+    }
+    fs.rmSync(path.join(twin, 'src', 'gone.ts'));
+    const fresh = CodeGraph.initSync(twin);
+    await fresh.indexAll();
+    fresh.close();
+
+    const a = graphShape(wt);
+    const b = graphShape(twin);
+    expect(a.nodes).toEqual(b.nodes);
+    expect(a.edges).toEqual(b.edges);
+    expect(a.edges.some((e) => e.endsWith('caller>shared'))).toBe(true);
+    expect(a.nodes.some((n) => n.includes(':worktreeOnly:'))).toBe(true);
+    expect(a.nodes.some((n) => n.includes(':mainOnly:'))).toBe(false);
+  });
+
+  it('leaves the source index untouched', () => {
+    const before = graphShape(repo);
+    seedWorktreeIndex(main, wt);
+    expect(graphShape(repo)).toEqual(before);
   });
 });
