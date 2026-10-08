@@ -20,6 +20,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
+import { isInitialized } from '../directory';
 
 /**
  * Absolute, symlink-resolved toplevel of the git working tree that `dir`
@@ -76,6 +77,33 @@ export function detectWorktreeIndexMismatch(
   if (gitWorktreeRoot(resolvedIndexRoot) !== resolvedIndexRoot) return null;
 
   return { worktreeRoot, indexRoot: resolvedIndexRoot };
+}
+
+/**
+ * First OTHER working tree of the same repository that already has a
+ * CodeGraph index, main checkout first (it heads `git worktree list`). Worktrees
+ * of one repo usually differ by a branch's worth of files, so its index is a
+ * near-complete starting point for this one. Null outside git or when no
+ * sibling is indexed.
+ */
+export function findIndexedSiblingWorktree(worktreeRoot: string): string | null {
+  let out: string;
+  try {
+    out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      cwd: worktreeRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {
+    return null;
+  }
+  const self = realpath(worktreeRoot);
+  for (const line of out.split('\n')) {
+    if (!line.startsWith('worktree ')) continue;
+    const candidate = realpath(line.slice('worktree '.length));
+    if (candidate !== self && isInitialized(candidate)) return candidate;
+  }
+  return null;
 }
 
 /** One-line-per-fact warning describing a detected mismatch. */
