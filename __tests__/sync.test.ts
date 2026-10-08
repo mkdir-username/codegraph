@@ -12,6 +12,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { execFileSync } from 'child_process';
 import CodeGraph from '../src/index';
+import { DatabaseConnection, getDatabasePath } from '../src/db';
 
 describe('Sync Module', () => {
   describe('Sync Functionality', () => {
@@ -347,6 +348,45 @@ describe('sync keeps edges from untouched files into rewritten ones', () => {
     fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'export function other() { return 3; }\n');
     await cg.sync();
     expect(cg.searchNodes('shared').filter((r) => r.node.name === 'shared')).toEqual([]);
+  });
+
+  /** Plant a synthesized caller→shared edge whose wiring site is `registeredAt`. */
+  function plantHeuristicEdge(registeredAt: string): void {
+    const caller = cg.searchNodes('caller').find((r) => r.node.name === 'caller')!.node;
+    const shared = cg.searchNodes('shared').find((r) => r.node.name === 'shared')!.node;
+    const conn = DatabaseConnection.open(getDatabasePath(dir));
+    try {
+      conn.getDb().prepare(
+        "INSERT INTO edges (source, target, kind, metadata, provenance) VALUES (?, ?, 'calls', ?, 'heuristic')",
+      ).run(caller.id, shared.id, JSON.stringify({ synthesizedBy: 'event-emitter', registeredAt }));
+    } finally {
+      conn.close();
+    }
+  }
+
+  function heuristicEdgeCount(): number {
+    const conn = DatabaseConnection.open(getDatabasePath(dir));
+    try {
+      return (conn.getDb().prepare(
+        "SELECT count(*) AS n FROM edges WHERE json_extract(metadata, '$.synthesizedBy') = 'event-emitter'",
+      ).get() as { n: number }).n;
+    } finally {
+      conn.close();
+    }
+  }
+
+  it('synthesized edge wired inside the rewritten file is not restored', async () => {
+    plantHeuristicEdge('src/a.ts:1');
+    fs.writeFileSync(path.join(dir, 'src', 'a.ts'), '// moved down\n\nexport function shared() { return 2; }\n');
+    await cg.sync();
+    expect(heuristicEdgeCount()).toBe(0);
+  });
+
+  it('synthesized edge wired in an untouched file is restored', async () => {
+    plantHeuristicEdge('src/b.ts:2');
+    fs.writeFileSync(path.join(dir, 'src', 'a.ts'), '// moved down\n\nexport function shared() { return 2; }\n');
+    await cg.sync();
+    expect(heuristicEdgeCount()).toBe(1);
   });
 
   it('same-file call is not duplicated when the file is rewritten', async () => {
