@@ -901,7 +901,17 @@ function dispatchTableEdges(ctx: ResolutionContext): Edge[] {
  * them: the caller swaps them in for the previous set in one transaction
  * (QueryBuilder.replaceSynthesizedEdges). Callers wrap in try/catch.
  */
-export function synthesizeCallbackEdges(queries: QueryBuilder, ctx: ResolutionContext): Edge[] {
+export function synthesizeCallbackEdges(queries: QueryBuilder, outer: ResolutionContext): Edge[] {
+  // Several channels scan every file; the resolver's bounded LRU evicts a
+  // large repo's files between passes, so each pass re-read them all from disk.
+  const contents = new Map<string, string | null>();
+  const ctx: ResolutionContext = {
+    ...outer,
+    readFile: (filePath) => {
+      if (!contents.has(filePath)) contents.set(filePath, outer.readFile(filePath));
+      return contents.get(filePath)!;
+    },
+  };
   const fieldEdges = fieldChannelEdges(queries, ctx);
   const emitterEdges = eventEmitterEdges(ctx);
   const renderEdges = reactRenderEdges(queries, ctx);
