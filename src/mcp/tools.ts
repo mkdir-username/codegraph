@@ -994,7 +994,12 @@ export class ToolHandler {
   }
 
   private async seedWorktreeFrom(sibling: string, root: string): Promise<void> {
-    const published = seedWorktreeIndex(this.getCodeGraph(sibling), root);
+    // The default project is usually that sibling under a symlinked path;
+    // copying through it avoids a second connection to the same database.
+    const source = this.cg && realpathSync(this.cg.getProjectRoot()) === sibling
+      ? this.cg
+      : this.getCodeGraph(sibling);
+    const published = seedWorktreeIndex(source, root);
     await this.syncSeed(root, published);
   }
 

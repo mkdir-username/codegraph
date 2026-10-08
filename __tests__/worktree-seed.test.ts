@@ -387,4 +387,12 @@ describe('ToolHandler seeds a worktree on first call', () => {
     expectFound(res, 'subOnly');
     expect(fs.existsSync(path.join(wt, '.codegraph'))).toBe(false);
   });
+
+  // tmpdir is /var → /private/var on macOS: main's root is the symlinked path,
+  // the sibling resolved by git is the real one.
+  it.runIf(process.platform === 'darwin')('seeding reuses the open sibling connection', async () => {
+    await handler.execute('codegraph_search', { query: 'worktreeOnly', projectPath: wt });
+    const cache = handler['projectCache'] as Map<string, CodeGraph>;
+    expect([...cache.keys()]).not.toContain(real(repo));
+  });
 });
