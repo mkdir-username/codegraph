@@ -2,7 +2,7 @@
  * Seeding a git worktree's index from an already-indexed sibling worktree.
  * Real git, real temp worktrees, real SQLite — no mocking.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -267,6 +267,68 @@ describe('ToolHandler seeds a worktree on first call', () => {
     expect(res.isError).toBeFalsy();
     expect(res.content[0].text).toContain('worktreeOnly');
     expect(res.content[0].text).not.toContain('different git worktree');
+  });
+
+  it('parallel calls share one seed: one db, no temp files, all answers fresh', async () => {
+    const calls = ['worktreeOnly', 'newCaller', 'shared'].map((q) =>
+      handler.execute('codegraph_search', { query: q, projectPath: wt }),
+    );
+    const results = await Promise.all(calls);
+    for (const r of results) expect(r.isError).toBeFalsy();
+    expect(results[0].content[0].text).toContain('worktreeOnly');
+    expect(fs.readdirSync(path.join(wt, '.codegraph')).filter((f) => f.endsWith('.db')))
+      .toEqual(['codegraph.db']);
+  });
+
+  it('broken sibling index: old error, no codegraph.db published', async () => {
+    // A repo whose only "index" is garbage: seeding must fail before publishing.
+    const lone = makeRepo();
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-seed-lone-'));
+    const loneWt = addDivergedWorktree(lone, other);
+    fs.mkdirSync(path.join(lone, '.codegraph'));
+    fs.writeFileSync(path.join(lone, '.codegraph', 'codegraph.db'), 'not a database');
+    const fresh = new ToolHandler(null);
+    try {
+      const res = await fresh.execute('codegraph_search', { query: 'shared', projectPath: loneWt });
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain('CodeGraph not initialized');
+      expect(fs.existsSync(path.join(loneWt, '.codegraph', 'codegraph.db'))).toBe(false);
+    } finally {
+      fresh.closeAll();
+      try { git(lone, 'worktree', 'remove', '--force', loneWt); } catch { /* best effort */ }
+      fs.rmSync(lone, { recursive: true, force: true });
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it('sync fails after publish: the unsynced copy is removed, the next call retries', async () => {
+    const spy = vi.spyOn(CodeGraph.prototype, 'sync').mockResolvedValueOnce({
+      filesChecked: 0, filesAdded: 0, filesModified: 0, filesRemoved: 0, nodesUpdated: 0, durationMs: 0,
+    });
+    try {
+      const res = await handler.execute('codegraph_search', { query: 'worktreeOnly', projectPath: wt });
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain('CodeGraph not initialized');
+      expect(fs.existsSync(path.join(wt, '.codegraph', 'codegraph.db'))).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+    // A held lock is transient: the failure must not be cached for this path.
+    const retry = await handler.execute('codegraph_search', { query: 'worktreeOnly', projectPath: wt });
+    expect(retry.isError).toBeFalsy();
+    expect(retry.content[0].text).toContain('worktreeOnly');
+  });
+
+  it('CODEGRAPH_WORKTREE_SEED=0 keeps the old behavior', async () => {
+    process.env.CODEGRAPH_WORKTREE_SEED = '0';
+    try {
+      const res = await handler.execute('codegraph_search', { query: 'worktreeOnly', projectPath: wt });
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain('CodeGraph not initialized');
+      expect(fs.existsSync(path.join(wt, '.codegraph'))).toBe(false);
+    } finally {
+      delete process.env.CODEGRAPH_WORKTREE_SEED;
+    }
   });
 
   it('no indexed sibling: keeps the "not initialized" error and writes nothing', async () => {
