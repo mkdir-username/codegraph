@@ -1166,11 +1166,8 @@ export class QueryBuilder {
       for (const row of rows) {
         if (rewritten.has(row.s_file)) continue;
         const edge = rowToEdge(row);
-        // A synthesized edge is only as true as its wiring site; if that site
-        // is being rewritten, the wiring may be gone — silent beats wrong.
-        const registeredAt = edge.metadata?.registeredAt;
-        if (edge.provenance === 'heuristic' && typeof registeredAt === 'string'
-          && rewritten.has(registeredAt.slice(0, registeredAt.lastIndexOf(':')))) continue;
+        // Synthesized edges are rebuilt by the synthesizers after re-indexing.
+        if (typeof edge.metadata?.synthesizedBy === 'string') continue;
         out.push({
           edge,
           targetFile: row.t_file,
@@ -1204,6 +1201,11 @@ export class QueryBuilder {
     }
     this.insertEdges(edges);
     return edges.length;
+  }
+
+  /** Synthesized edges are rebuilt wholesale by the synthesizers after a sync. */
+  deleteSynthesizedEdges(): void {
+    this.db.prepare("DELETE FROM edges WHERE json_extract(metadata, '$.synthesizedBy') IS NOT NULL").run();
   }
 
   /**

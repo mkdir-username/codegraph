@@ -613,6 +613,19 @@ export class ReferenceResolver {
   }
 
   /**
+   * Re-run dynamic-edge synthesis over the whole graph. Not idempotent: the
+   * caller deletes synthesized edges first (QueryBuilder.deleteSynthesizedEdges).
+   */
+  synthesize(): number {
+    try {
+      return synthesizeCallbackEdges(this.queries, this.context);
+    } catch {
+      // synthesis is additive and optional; ignore failures
+      return 0;
+    }
+  }
+
+  /**
    * Resolve and persist in batches to keep memory bounded.
    * Processes unresolved references in chunks, persisting edges and cleaning
    * up resolved refs after each batch to avoid accumulating large arrays.
@@ -693,11 +706,7 @@ export class ReferenceResolver {
     // synthesize observer/callback dispatch edges (dispatcher → registered
     // callbacks) that static parsing leaves out. Best-effort — never fail the
     // index on it. See docs/design/callback-edge-synthesis.md.
-    try {
-      aggregateStats.byMethod['callback-synthesis'] = synthesizeCallbackEdges(this.queries, this.context);
-    } catch {
-      // synthesis is additive and optional; ignore failures
-    }
+    aggregateStats.byMethod['callback-synthesis'] = this.synthesize();
 
     return {
       resolved: [],

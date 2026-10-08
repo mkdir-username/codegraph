@@ -428,6 +428,10 @@ export class CodeGraph {
         // Re-detect frameworks when new files appear (e.g. SDUI screens added post-init)
         if (result.filesAdded > 0) {
           this.reinitializeResolver();
+        } else if (result.filesModified > 0 || result.filesRemoved > 0) {
+          // The resolver outlives a sync (watch daemon, MCP): its file-content
+          // and symbol-name caches still describe the files before this sync.
+          this.resolver.clearCaches();
         }
 
         // Resolve references if files were updated
@@ -467,6 +471,13 @@ export class CodeGraph {
               });
             });
           }
+        }
+
+        if (result.filesAdded > 0 || result.filesModified > 0 || result.filesRemoved > 0) {
+          // Synthesis reads whole files, and edges whose source was rewritten
+          // are gone, so rebuild every synthesized edge rather than patch them.
+          this.queries.deleteSynthesizedEdges();
+          this.resolver.synthesize();
         }
 
         // Refresh planner stats + checkpoint the WAL after bulk writes.

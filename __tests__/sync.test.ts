@@ -382,13 +382,6 @@ describe('sync keeps edges from untouched files into rewritten ones', () => {
     expect(heuristicEdgeCount()).toBe(0);
   });
 
-  it('synthesized edge wired in an untouched file is restored', async () => {
-    plantHeuristicEdge('src/b.ts:2');
-    fs.writeFileSync(path.join(dir, 'src', 'a.ts'), '// moved down\n\nexport function shared() { return 2; }\n');
-    await cg.sync();
-    expect(heuristicEdgeCount()).toBe(1);
-  });
-
   it('same-file call is not duplicated when the file is rewritten', async () => {
     fs.writeFileSync(path.join(dir, 'src', 'g.ts'), 'function g() { return 1; }\nfunction f() { return g(); }\n');
     await cg.sync();
@@ -405,5 +398,63 @@ describe('sync keeps edges from untouched files into rewritten ones', () => {
     fs.writeFileSync(path.join(dir, 'src', 'g.ts'), 'function g() { return 1; }\nfunction f() { return 2; }\n');
     await cg.sync();
     expect(callersOf('g')).not.toContain('f');
+  });
+});
+
+describe('sync re-synthesizes edges of rewritten files', () => {
+  let dir: string;
+  let cg: CodeGraph;
+
+  beforeEach(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-sync-synth-'));
+    fs.mkdirSync(path.join(dir, 'src'));
+    fs.writeFileSync(path.join(dir, 'src', 'child.tsx'), 'export function Child() { return null; }\n');
+    fs.writeFileSync(path.join(dir, 'src', 'other.tsx'), 'export function Other() { return null; }\n');
+    fs.writeFileSync(
+      path.join(dir, 'src', 'app.tsx'),
+      "import { Child } from './child';\nexport function App() { return <Child />; }\n",
+    );
+    cg = CodeGraph.initSync(dir);
+    await cg.indexAll();
+  });
+
+  afterEach(() => {
+    try { cg.destroy(); } catch { /* best effort */ }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function synthesized(): string[] {
+    const conn = DatabaseConnection.open(getDatabasePath(dir));
+    try {
+      return (conn.getDb().prepare(
+        "SELECT json_extract(e.metadata, '$.synthesizedBy') || ':' || s.name || '>' || t.name AS k " +
+        'FROM edges e JOIN nodes s ON s.id = e.source JOIN nodes t ON t.id = e.target ' +
+        "WHERE json_extract(e.metadata, '$.synthesizedBy') IS NOT NULL ORDER BY k",
+      ).all() as Array<{ k: string }>).map((r) => r.k);
+    } finally {
+      conn.close();
+    }
+  }
+
+  it('re-synthesizes the JSX edge of an edited component, without duplicates', async () => {
+    const before = synthesized();
+    expect(before).toContain('jsx-render:App>Child');
+    fs.writeFileSync(
+      path.join(dir, 'src', 'app.tsx'),
+      "import { Child } from './child';\n\n// moved\nexport function App() { return <Child />; }\n",
+    );
+    await cg.sync();
+    expect(synthesized()).toEqual(before);
+  });
+
+  it('follows the new source of an edited component, not the cached old one', async () => {
+    fs.writeFileSync(
+      path.join(dir, 'src', 'app.tsx'),
+      "import { Other } from './other';\nexport function App() { return <Other />; }\n",
+    );
+    await cg.sync();
+    const after = synthesized();
+    expect(after).toContain('jsx-render:App>Other');
+    expect(after).not.toContain('jsx-render:App>Child');
   });
 });
