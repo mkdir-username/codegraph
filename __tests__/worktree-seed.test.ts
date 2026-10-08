@@ -375,4 +375,16 @@ describe('ToolHandler seeds a worktree on first call', () => {
       fs.rmSync(lone, { recursive: true, force: true });
     }
   });
+
+  it('sub-project with its own index inside an unindexed worktree is left alone', async () => {
+    const sub = path.join(wt, 'packages', 'app');
+    fs.mkdirSync(path.join(sub, 'src'), { recursive: true });
+    fs.writeFileSync(path.join(sub, 'src', 'sub.ts'), 'export function subOnly() { return 4; }\n');
+    const subCg = CodeGraph.initSync(sub);
+    await subCg.indexAll();
+    subCg.close();
+    const res = await handler.execute('codegraph_search', { query: 'subOnly', projectPath: sub });
+    expectFound(res, 'subOnly');
+    expect(fs.existsSync(path.join(wt, '.codegraph'))).toBe(false);
+  });
 });

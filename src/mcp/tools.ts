@@ -26,13 +26,14 @@ import {
   lstatSync,
   openSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeSync,
 } from 'fs';
 import { buildNoEdgeGuidance } from '../graph/no-edge-guidance';
 import { clamp, validatePathWithinRoot, validateProjectPath } from '../utils';
 import { tmpdir } from 'os';
-import { join, resolve as resolvePath } from 'path';
+import { join, resolve as resolvePath, sep } from 'path';
 
 /** Maximum output length to prevent context bloat (characters) */
 const MAX_OUTPUT_LENGTH = 15000;
@@ -956,7 +957,9 @@ export class ToolHandler {
     let seeded: string | null = null;
     try {
       const root = knownRoot ?? (existsSync(startPath) ? gitWorktreeRoot(startPath) : null);
-      if (root) {
+      // A sub-project indexed on its own (packages/app) is its own project.
+      const nearest = root ? findNearestCodeGraphRoot(startPath) : null;
+      if (root && !(nearest && realpathSync(nearest).startsWith(root + sep))) {
         let pending = this.worktreeSeeds.get(root);
         if (!pending && this.unsyncedSeeds.has(root)) {
           pending = this.trackSeed(root, this.syncSeed(root, false));
