@@ -476,7 +476,6 @@ export class CodeGraph {
         if (result.filesAdded > 0 || result.filesModified > 0 || result.filesRemoved > 0) {
           // Synthesis reads whole files, and edges whose source was rewritten
           // are gone, so rebuild every synthesized edge rather than patch them.
-          this.queries.deleteSynthesizedEdges();
           this.resolver.synthesize();
         }
 

@@ -897,10 +897,11 @@ function dispatchTableEdges(ctx: ResolutionContext): Edge[] {
 /**
  * Synthesize dispatcher→callback edges (field observers + EventEmitters +
  * React re-render + JSX children + Vue templates + RN event channel +
- * Fabric native-impl + const dispatch-table). Returns the count added. Never
- * throws into indexing — callers wrap in try/catch.
+ * Fabric native-impl + const dispatch-table). Returns the edges without writing
+ * them: the caller swaps them in for the previous set in one transaction
+ * (QueryBuilder.replaceSynthesizedEdges). Callers wrap in try/catch.
  */
-export function synthesizeCallbackEdges(queries: QueryBuilder, ctx: ResolutionContext): number {
+export function synthesizeCallbackEdges(queries: QueryBuilder, ctx: ResolutionContext): Edge[] {
   const fieldEdges = fieldChannelEdges(queries, ctx);
   const emitterEdges = eventEmitterEdges(ctx);
   const renderEdges = reactRenderEdges(queries, ctx);
@@ -933,6 +934,5 @@ export function synthesizeCallbackEdges(queries: QueryBuilder, ctx: ResolutionCo
     seen.add(key);
     merged.push(e);
   }
-  if (merged.length > 0) queries.insertEdges(merged);
-  return merged.length;
+  return merged;
 }

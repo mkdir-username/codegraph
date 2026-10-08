@@ -14,6 +14,7 @@ import { execFileSync } from 'child_process';
 import CodeGraph from '../src/index';
 import { DatabaseConnection, getDatabasePath } from '../src/db';
 import { ExtractionOrchestrator } from '../src/extraction';
+import { QueryBuilder } from '../src/db/queries';
 
 describe('Sync Module', () => {
   describe('Sync Functionality', () => {
@@ -516,6 +517,28 @@ describe('sync re-synthesizes edges of rewritten files', () => {
     }
     expect(childIndexed).toBe(true);
     expect(synthesized()).toContain('jsx-render:App>Child');
+  });
+
+  it('keeps the previous synthesized edges when rebuilding them fails', async () => {
+    const before = synthesized();
+    fs.appendFileSync(path.join(dir, 'src', 'other.tsx'), 'export const tail = 1;\n');
+    const original = QueryBuilder.prototype.insertEdge;
+    const spy = vi.spyOn(QueryBuilder.prototype, 'insertEdge').mockImplementation(function (this: QueryBuilder, e) {
+      if (typeof e.metadata?.synthesizedBy === 'string') throw new Error('disk full');
+      return original.call(this, e);
+    });
+    try {
+      await cg.sync();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(synthesized()).toEqual(before);
+  });
+
+  it('a second full index does not duplicate synthesized edges', async () => {
+    const before = synthesized();
+    await cg.indexAll();
+    expect(synthesized()).toEqual(before);
   });
 
   it('follows the new source of an edited component, not the cached old one', async () => {

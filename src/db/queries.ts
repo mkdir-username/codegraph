@@ -1123,22 +1123,23 @@ export class QueryBuilder {
    */
   insertEdges(edges: Edge[]): void {
     if (edges.length === 0) return;
+    this.db.transaction(() => this.insertEdgesWithLiveEndpoints(edges))();
+  }
 
-    this.db.transaction(() => {
-      const endpointIds = new Set<string>();
-      for (const edge of edges) {
-        endpointIds.add(edge.source);
-        endpointIds.add(edge.target);
-      }
-      const existingNodeIds = this.getExistingNodeIds([...endpointIds]);
+  private insertEdgesWithLiveEndpoints(edges: Edge[]): void {
+    const endpointIds = new Set<string>();
+    for (const edge of edges) {
+      endpointIds.add(edge.source);
+      endpointIds.add(edge.target);
+    }
+    const existingNodeIds = this.getExistingNodeIds([...endpointIds]);
 
-      for (const edge of edges) {
-        if (!existingNodeIds.has(edge.source) || !existingNodeIds.has(edge.target)) {
-          continue;
-        }
-        this.insertEdge(edge);
+    for (const edge of edges) {
+      if (!existingNodeIds.has(edge.source) || !existingNodeIds.has(edge.target)) {
+        continue;
       }
-    })();
+      this.insertEdge(edge);
+    }
   }
 
   /**
@@ -1200,9 +1201,16 @@ export class QueryBuilder {
     return edges.length;
   }
 
-  /** Synthesized edges are rebuilt wholesale by the synthesizers after a sync. */
-  deleteSynthesizedEdges(): void {
-    this.db.prepare("DELETE FROM edges WHERE json_extract(metadata, '$.synthesizedBy') IS NOT NULL").run();
+  /**
+   * Swap every synthesized edge for `edges` in one transaction: synthesis is
+   * not idempotent, and a failed write or a reader in another process must
+   * never see the project without its dispatch bridges.
+   */
+  replaceSynthesizedEdges(edges: Edge[]): void {
+    this.db.transaction(() => {
+      this.db.prepare("DELETE FROM edges WHERE json_extract(metadata, '$.synthesizedBy') IS NOT NULL").run();
+      this.insertEdgesWithLiveEndpoints(edges);
+    })();
   }
 
   /**

@@ -613,14 +613,16 @@ export class ReferenceResolver {
   }
 
   /**
-   * Re-run dynamic-edge synthesis over the whole graph. Not idempotent: the
-   * caller deletes synthesized edges first (QueryBuilder.deleteSynthesizedEdges).
+   * Rebuild every synthesized edge over the whole graph, replacing the
+   * previous set. Returns the number of edges synthesized.
    */
   synthesize(): number {
     try {
-      return synthesizeCallbackEdges(this.queries, this.context);
+      const edges = synthesizeCallbackEdges(this.queries, this.context);
+      this.queries.replaceSynthesizedEdges(edges);
+      return edges.length;
     } catch {
-      // synthesis is additive and optional; ignore failures
+      // synthesis is additive and optional; the previous edges stay in place
       return 0;
     }
   }
