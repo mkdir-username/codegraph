@@ -420,7 +420,7 @@ describe('sync keeps edges from untouched files into rewritten ones', () => {
     }
   }
 
-  it('synthesized edge wired inside the rewritten file is not restored', async () => {
+  it('a synthesized edge the synthesizers no longer produce is gone after sync', async () => {
     plantHeuristicEdge('src/a.ts:1');
     fs.writeFileSync(path.join(dir, 'src', 'a.ts'), '// moved down\n\nexport function shared() { return 2; }\n');
     await cg.sync();
@@ -490,6 +490,32 @@ describe('sync re-synthesizes edges of rewritten files', () => {
     );
     await cg.sync();
     expect(synthesized()).toEqual(before);
+  });
+
+  it('keeps a synthesized edge into an edited file when a later file fails to index', async () => {
+    expect(synthesized()).toContain('jsx-render:App>Child');
+    fs.writeFileSync(path.join(dir, 'src', 'child.tsx'), '\n// moved\nexport function Child() { return null; }\n');
+    fs.writeFileSync(path.join(dir, 'src', 'z.ts'), 'export const z = 1;\n');
+    const original = ExtractionOrchestrator.prototype.indexFile;
+    let childIndexed = false;
+    const spy = vi.spyOn(ExtractionOrchestrator.prototype, 'indexFile').mockImplementation(
+      async function (this: ExtractionOrchestrator, p: string) {
+        if (p === 'src/child.tsx') {
+          const r = await original.call(this, p);
+          childIndexed = true;
+          return r;
+        }
+        if (childIndexed) throw new Error('parse exploded');
+        return original.call(this, p);
+      },
+    );
+    try {
+      await expect(cg.sync()).rejects.toThrow('parse exploded');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(childIndexed).toBe(true);
+    expect(synthesized()).toContain('jsx-render:App>Child');
   });
 
   it('follows the new source of an edited component, not the cached old one', async () => {

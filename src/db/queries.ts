@@ -1165,11 +1165,8 @@ export class QueryBuilder {
       ).all(...chunk) as Array<EdgeRow & { s_file: string; t_file: string; t_kind: string; t_qname: string }>;
       for (const row of rows) {
         if (rewritten.has(row.s_file)) continue;
-        const edge = rowToEdge(row);
-        // Synthesized edges are rebuilt by the synthesizers after re-indexing.
-        if (typeof edge.metadata?.synthesizedBy === 'string') continue;
         out.push({
-          edge,
+          edge: rowToEdge(row),
           targetFile: row.t_file,
           targetKind: row.t_kind,
           targetQualifiedName: row.t_qname,
