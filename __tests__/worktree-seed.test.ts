@@ -22,6 +22,12 @@ function real(p: string): string {
   return fs.realpathSync(path.resolve(p));
 }
 
+/** A search hit, not the "No results found for <query>" reply that echoes the query back. */
+function expectFound(res: { content: Array<{ text: string }> }, name: string): void {
+  expect(res.content[0].text).not.toContain('No results found');
+  expect(res.content[0].text).toContain(name);
+}
+
 function makeRepo(): string {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-seed-main-'));
   git(repo, 'init', '-q');
@@ -215,14 +221,15 @@ describe('ToolHandler seeds a worktree on first call', () => {
   it('sibling worktree: answers from its own synced index', async () => {
     const res = await handler.execute('codegraph_search', { query: 'worktreeOnly', projectPath: wt });
     expect(res.isError).toBeFalsy();
-    expect(res.content[0].text).toContain('worktreeOnly');
+    expectFound(res, 'worktreeOnly');
     expect(CodeGraph.isInitialized(wt)).toBe(true);
   });
 
   it('sibling worktree: callers of a symbol in a changed file survive', async () => {
     const res = await handler.execute('codegraph_callers', { symbol: 'shared', projectPath: wt });
     expect(res.isError).toBeFalsy();
-    expect(res.content[0].text).toContain('caller');
+    expect(res.content[0].text).not.toContain('No callers found');
+    expect(res.content[0].text).toContain('- caller (');
   });
 
   it('sibling worktree: symbols deleted in the worktree are gone', async () => {
@@ -243,7 +250,7 @@ describe('ToolHandler seeds a worktree on first call', () => {
   it('nested worktree: own index instead of the borrowed one, no #155 notice', async () => {
     nested = addDivergedWorktree(repo, repo, 'nested');
     const res = await handler.execute('codegraph_search', { query: 'worktreeOnly', projectPath: nested });
-    expect(res.content[0].text).toContain('worktreeOnly');
+    expectFound(res, 'worktreeOnly');
     expect(res.content[0].text).not.toContain('different git worktree');
     expect(CodeGraph.isInitialized(nested)).toBe(true);
   });
@@ -254,7 +261,7 @@ describe('ToolHandler seeds a worktree on first call', () => {
     try {
       const res = await bare.execute('codegraph_search', { query: 'worktreeOnly' });
       expect(res.isError).toBeFalsy();
-      expect(res.content[0].text).toContain('worktreeOnly');
+      expectFound(res, 'worktreeOnly');
     } finally {
       bare.closeAll();
     }
@@ -265,17 +272,31 @@ describe('ToolHandler seeds a worktree on first call', () => {
     handler.setDefaultProjectHint(nested);
     const res = await handler.execute('codegraph_search', { query: 'worktreeOnly' });
     expect(res.isError).toBeFalsy();
-    expect(res.content[0].text).toContain('worktreeOnly');
+    expectFound(res, 'worktreeOnly');
     expect(res.content[0].text).not.toContain('different git worktree');
   });
 
-  it('parallel calls share one seed: one db, no temp files, all answers fresh', async () => {
-    const calls = ['worktreeOnly', 'newCaller', 'shared'].map((q) =>
-      handler.execute('codegraph_search', { query: q, projectPath: wt }),
-    );
-    const results = await Promise.all(calls);
-    for (const r of results) expect(r.isError).toBeFalsy();
-    expect(results[0].content[0].text).toContain('worktreeOnly');
+  it('parallel calls share one seed: every answer waits for the sync, one db, no temp files', async () => {
+    // A slow sync widens the window in which a call that did not join the
+    // in-flight seed would read the copy before sync() reconciled it.
+    const original = CodeGraph.prototype.sync;
+    const spy = vi.spyOn(CodeGraph.prototype, 'sync').mockImplementation(async function (this: CodeGraph, ...rest) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return original.apply(this, rest);
+    });
+    try {
+      const queries = ['worktreeOnly', 'newCaller', 'shared'];
+      const results = await Promise.all(queries.map((q) =>
+        handler.execute('codegraph_search', { query: q, projectPath: wt }),
+      ));
+      results.forEach((r, i) => {
+        expect(r.isError).toBeFalsy();
+        expectFound(r, queries[i]);
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
     expect(fs.readdirSync(path.join(wt, '.codegraph')).filter((f) => f.endsWith('.db')))
       .toEqual(['codegraph.db']);
   });
@@ -316,7 +337,7 @@ describe('ToolHandler seeds a worktree on first call', () => {
     }
     const retry = await handler.execute('codegraph_search', { query: 'worktreeOnly', projectPath: wt });
     expect(retry.isError).toBeFalsy();
-    expect(retry.content[0].text).toContain('worktreeOnly');
+    expectFound(retry, 'worktreeOnly');
   });
 
   it('sync throws after publish: our unsynced copy is removed', async () => {
