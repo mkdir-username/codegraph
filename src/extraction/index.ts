@@ -1376,10 +1376,10 @@ export class ExtractionOrchestrator {
     // Removals: tracked in the DB but no longer a present source file. Check the
     // filesystem directly — `scanDirectory` (via `git ls-files`) still lists a
     // file deleted from disk but not yet staged, so set membership alone misses it.
+    const removedPaths: string[] = [];
     for (const tracked of trackedFiles) {
       if (!currentSet.has(tracked.path) || !fs.existsSync(path.join(this.rootDir, tracked.path))) {
-        this.queries.deleteFile(tracked.path);
-        filesRemoved++;
+        removedPaths.push(tracked.path);
       }
     }
 
@@ -1440,6 +1440,16 @@ export class ExtractionOrchestrator {
       this.detectedFrameworkNames = null;
     }
 
+    // Untouched files' edges into rewritten files die with the old nodes (FK
+    // cascade), and only the rewritten files' own refs are re-resolved — so
+    // callers would silently vanish. Capture them before any delete.
+    const rewritten = [...removedPaths, ...filesToIndex.filter((p) => trackedMap.has(p))];
+    const incoming = this.queries.captureIncomingEdges(rewritten);
+    for (const removed of removedPaths) {
+      this.queries.deleteFile(removed);
+      filesRemoved++;
+    }
+
     // Index changed files
     const total = filesToIndex.length;
     for (let i = 0; i < filesToIndex.length; i++) {
@@ -1454,6 +1464,8 @@ export class ExtractionOrchestrator {
       const result = await this.indexFile(filePath);
       nodesUpdated += result.nodes.length;
     }
+
+    this.queries.restoreIncomingEdges(incoming);
 
     return {
       filesChecked,

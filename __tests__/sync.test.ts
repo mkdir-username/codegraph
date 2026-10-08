@@ -304,3 +304,66 @@ describe('Sync Module', () => {
     });
   });
 });
+
+describe('sync keeps edges from untouched files into rewritten ones', () => {
+  let dir: string;
+  let cg: CodeGraph;
+
+  beforeEach(async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-sync-incoming-'));
+    fs.mkdirSync(path.join(dir, 'src'));
+    fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'export function shared() { return 1; }\n');
+    fs.writeFileSync(
+      path.join(dir, 'src', 'b.ts'),
+      "import { shared } from './a';\nexport function caller() { return shared(); }\n",
+    );
+    cg = CodeGraph.initSync(dir);
+    await cg.indexAll();
+  });
+
+  afterEach(() => {
+    try { cg.destroy(); } catch { /* best effort */ }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function callersOf(name: string): string[] {
+    const n = cg.searchNodes(name).find((r) => r.node.name === name)!.node;
+    return cg.getCallers(n.id).map((c) => c.node.name).sort();
+  }
+
+  it('caller survives when the callee file is edited and its lines shift', async () => {
+    // getCallers also counts `imports` edges, so compare whole lists, not a literal.
+    const before = callersOf('shared');
+    expect(before).toContain('caller');
+    fs.writeFileSync(
+      path.join(dir, 'src', 'a.ts'),
+      '// moved down\n\nexport function shared() { return 2; }\n',
+    );
+    await cg.sync();
+    expect(callersOf('shared')).toEqual(before);
+  });
+
+  it('edge is dropped when the callee is removed', async () => {
+    fs.writeFileSync(path.join(dir, 'src', 'a.ts'), 'export function other() { return 3; }\n');
+    await cg.sync();
+    expect(cg.searchNodes('shared').filter((r) => r.node.name === 'shared')).toEqual([]);
+  });
+
+  it('same-file call is not duplicated when the file is rewritten', async () => {
+    fs.writeFileSync(path.join(dir, 'src', 'g.ts'), 'function g() { return 1; }\nfunction f() { return g(); }\n');
+    await cg.sync();
+    const before = callersOf('g');
+    expect(before).toContain('f');
+    fs.appendFileSync(path.join(dir, 'src', 'g.ts'), 'export const tail = 1;\n');
+    await cg.sync();
+    expect(callersOf('g')).toEqual(before);
+  });
+
+  it('same-file call removed by the edit is not restored', async () => {
+    fs.writeFileSync(path.join(dir, 'src', 'g.ts'), 'function g() { return 1; }\nfunction f() { return g(); }\n');
+    await cg.sync();
+    fs.writeFileSync(path.join(dir, 'src', 'g.ts'), 'function g() { return 1; }\nfunction f() { return 2; }\n');
+    await cg.sync();
+    expect(callersOf('g')).not.toContain('f');
+  });
+});

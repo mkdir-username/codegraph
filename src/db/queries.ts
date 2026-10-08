@@ -23,6 +23,14 @@ import { parseQuery, boundedEditDistance } from '../search/query-parser';
 
 const SQLITE_PARAM_CHUNK_SIZE = 500;
 
+/** An edge into a file about to be re-indexed, keyed by its target's identity. */
+export interface CapturedIncomingEdge {
+  edge: Edge;
+  targetFile: string;
+  targetKind: string;
+  targetQualifiedName: string;
+}
+
 /**
  * Database row types (snake_case from SQLite)
  */
@@ -1131,6 +1139,65 @@ export class QueryBuilder {
         this.insertEdge(edge);
       }
     })();
+  }
+
+  /**
+   * Edges from OTHER files pointing INTO `filePaths`. Re-indexing a file
+   * deletes its nodes, and the FK cascade takes every incoming edge with them;
+   * node ids embed the line number, so they cannot be re-linked by id. Capture
+   * by target identity instead and re-attach after re-indexing
+   * (restoreIncomingEdges). Edges whose source is itself rewritten are left
+   * out: the resolver rebuilds those from the new source, and restoring them
+   * too would duplicate a kept call or resurrect a removed one.
+   */
+  captureIncomingEdges(filePaths: string[]): CapturedIncomingEdge[] {
+    const out: CapturedIncomingEdge[] = [];
+    const rewritten = new Set(filePaths);
+    for (let i = 0; i < filePaths.length; i += SQLITE_PARAM_CHUNK_SIZE) {
+      const chunk = filePaths.slice(i, i + SQLITE_PARAM_CHUNK_SIZE);
+      const rows = this.db.prepare(
+        `SELECT e.*, s.file_path AS s_file,
+                t.file_path AS t_file, t.kind AS t_kind, t.qualified_name AS t_qname
+         FROM edges e
+         JOIN nodes t ON t.id = e.target
+         JOIN nodes s ON s.id = e.source
+         WHERE t.file_path IN (${chunk.map(() => '?').join(',')})`
+      ).all(...chunk) as Array<EdgeRow & { s_file: string; t_file: string; t_kind: string; t_qname: string }>;
+      for (const row of rows) {
+        if (rewritten.has(row.s_file)) continue;
+        out.push({
+          edge: rowToEdge(row),
+          targetFile: row.t_file,
+          targetKind: row.t_kind,
+          targetQualifiedName: row.t_qname,
+        });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Re-attach captured edges to the re-indexed target with the same identity.
+   * A target that is gone or now ambiguous stays unlinked, as in a fresh index.
+   */
+  restoreIncomingEdges(captured: CapturedIncomingEdge[]): number {
+    if (captured.length === 0) return 0;
+    const findTarget = this.db.prepare(
+      'SELECT id FROM nodes WHERE file_path = ? AND kind = ? AND qualified_name = ? LIMIT 2'
+    );
+    const exists = this.db.prepare(
+      'SELECT 1 FROM edges WHERE source = ? AND target = ? AND kind = ? LIMIT 1'
+    );
+    const edges: Edge[] = [];
+    for (const c of captured) {
+      const hits = findTarget.all(c.targetFile, c.targetKind, c.targetQualifiedName) as Array<{ id: string }>;
+      if (hits.length !== 1) continue;
+      const target = hits[0]!.id;
+      if (exists.get(c.edge.source, target, c.edge.kind)) continue;
+      edges.push({ ...c.edge, target });
+    }
+    this.insertEdges(edges);
+    return edges.length;
   }
 
   /**
