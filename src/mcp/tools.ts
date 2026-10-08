@@ -651,10 +651,18 @@ export const tools: ToolDefinition[] = [
 /** The seeded copy could not be synced because another process holds the index lock. */
 class SeedLockBusyError extends Error {
   constructor(root: string) {
-    super(`sync did not run for ${root}: index lock is held`);
+    super(
+      `CodeGraph is still building the index for ${root} in another process ` +
+      '(index lock held) — retry the call in a few seconds.'
+    );
     this.name = 'SeedLockBusyError';
   }
 }
+
+// Another process holding a fresh seed's lock is normally syncing that same
+// copy; a short wait usually outlasts it.
+const SEED_LOCK_RETRIES = 5;
+const SEED_LOCK_WAIT_MS = 200;
 
 /**
  * Tool handler that executes tools against a CodeGraph instance
@@ -680,6 +688,9 @@ export class ToolHandler {
   // Seeds in flight by worktree root: parallel calls from several agents share
   // one copy + sync instead of each racing to build its own.
   private worktreeSeeds: Map<string, Promise<void>> = new Map();
+  // Seeded roots whose sync never got the lock: the copy is kept (another
+  // process may be syncing it) and synced on the next call before use.
+  private unsyncedSeeds: Set<string> = new Set();
 
   constructor(private cg: CodeGraph | null) {}
 
@@ -943,18 +954,15 @@ export class ToolHandler {
     if (cached !== undefined) return cached;
 
     let seeded: string | null = null;
-    let retryLater = false;
     try {
       const root = knownRoot ?? (existsSync(startPath) ? gitWorktreeRoot(startPath) : null);
       if (root) {
         let pending = this.worktreeSeeds.get(root);
-        if (!pending && !isInitialized(root)) {
+        if (!pending && this.unsyncedSeeds.has(root)) {
+          pending = this.trackSeed(root, this.syncSeed(root, false));
+        } else if (!pending && !isInitialized(root)) {
           const sibling = findIndexedSiblingWorktree(root);
-          if (sibling) {
-            pending = this.seedWorktreeFrom(sibling, root)
-              .finally(() => this.worktreeSeeds.delete(root));
-            this.worktreeSeeds.set(root, pending);
-          }
+          if (sibling) pending = this.trackSeed(root, this.seedWorktreeFrom(sibling, root));
         }
         if (pending) {
           await pending;
@@ -964,30 +972,53 @@ export class ToolHandler {
         }
       }
     } catch (err) {
-      // A held lock is transient — let the next call try again.
-      retryLater = err instanceof SeedLockBusyError;
       logWarn('Worktree index seeding failed', {
         startPath,
         error: err instanceof Error ? err.message : String(err),
       });
+      // Answering from an unsynced copy would be silently wrong; say so instead
+      // and leave the path uncached so the next call finishes the sync.
+      if (err instanceof SeedLockBusyError) throw err;
     }
-    if (!retryLater) this.worktreeSeedCache.set(startPath, seeded);
+    this.worktreeSeedCache.set(startPath, seeded);
     return seeded;
+  }
+
+  private trackSeed(root: string, work: Promise<void>): Promise<void> {
+    const pending = work.finally(() => this.worktreeSeeds.delete(root));
+    this.worktreeSeeds.set(root, pending);
+    return pending;
   }
 
   private async seedWorktreeFrom(sibling: string, root: string): Promise<void> {
     const published = seedWorktreeIndex(this.getCodeGraph(sibling), root);
+    await this.syncSeed(root, published);
+  }
+
+  /**
+   * Bring a seeded copy in line with this tree. A held lock means another
+   * process is syncing the same file, so the copy is kept, never deleted; only
+   * a real sync failure on a copy we published discards it.
+   */
+  private async syncSeed(root: string, published: boolean): Promise<void> {
     const cg = this.getCodeGraph(root);
-    try {
-      const res = await cg.sync();
-      // sync() reports all zeros when another process holds the index lock. A
-      // tree with no supported source files reads the same and is discarded
-      // too — there is nothing for an index of it to answer.
-      if (res.filesChecked === 0) throw new SeedLockBusyError(root);
-    } catch (err) {
-      if (published) this.discardSeed(root, cg);
-      throw err;
+    for (let attempt = 0; attempt < SEED_LOCK_RETRIES; attempt++) {
+      let res;
+      try {
+        res = await cg.sync();
+      } catch (err) {
+        if (published) this.discardSeed(root, cg);
+        throw err;
+      }
+      // All zeros with no elapsed time is sync()'s "lock held elsewhere" reply.
+      if (res.filesChecked > 0 || res.durationMs > 0) {
+        this.unsyncedSeeds.delete(root);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, SEED_LOCK_WAIT_MS));
     }
+    this.unsyncedSeeds.add(root);
+    throw new SeedLockBusyError(root);
   }
 
   /** Drop a copy that never got synced: it holds the sibling's branch, not this tree. */

@@ -301,10 +301,26 @@ describe('ToolHandler seeds a worktree on first call', () => {
     }
   });
 
-  it('sync fails after publish: the unsynced copy is removed, the next call retries', async () => {
-    const spy = vi.spyOn(CodeGraph.prototype, 'sync').mockResolvedValueOnce({
+  it('index lock held by another process: the copy is kept, the call says so, the next call syncs it', async () => {
+    // The exact shape CodeGraph.sync returns when another process holds the lock.
+    const spy = vi.spyOn(CodeGraph.prototype, 'sync').mockResolvedValue({
       filesChecked: 0, filesAdded: 0, filesModified: 0, filesRemoved: 0, nodesUpdated: 0, durationMs: 0,
     });
+    try {
+      const res = await handler.execute('codegraph_search', { query: 'worktreeOnly', projectPath: wt });
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain('index lock');
+      expect(fs.existsSync(path.join(wt, '.codegraph', 'codegraph.db'))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+    const retry = await handler.execute('codegraph_search', { query: 'worktreeOnly', projectPath: wt });
+    expect(retry.isError).toBeFalsy();
+    expect(retry.content[0].text).toContain('worktreeOnly');
+  });
+
+  it('sync throws after publish: our unsynced copy is removed', async () => {
+    const spy = vi.spyOn(CodeGraph.prototype, 'sync').mockRejectedValueOnce(new Error('disk full'));
     try {
       const res = await handler.execute('codegraph_search', { query: 'worktreeOnly', projectPath: wt });
       expect(res.isError).toBe(true);
@@ -313,10 +329,6 @@ describe('ToolHandler seeds a worktree on first call', () => {
     } finally {
       spy.mockRestore();
     }
-    // A held lock is transient: the failure must not be cached for this path.
-    const retry = await handler.execute('codegraph_search', { query: 'worktreeOnly', projectPath: wt });
-    expect(retry.isError).toBeFalsy();
-    expect(retry.content[0].text).toContain('worktreeOnly');
   });
 
   it('CODEGRAPH_WORKTREE_SEED=0 keeps the old behavior', async () => {
