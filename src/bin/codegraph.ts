@@ -32,6 +32,7 @@ import { createShimmerProgress } from '../ui/shimmer-progress';
 import { getGlyphs } from '../ui/glyphs';
 
 import { buildNode25BlockBanner, buildNodeTooOldBanner, isNodeTooOld } from './node-version-check';
+import { relaunchUnderSupportedNodeIfFound } from './supported-node';
 import { relaunchWithWasmRuntimeFlagsIfNeeded } from '../extraction/wasm-runtime-flags';
 
 // Lazy-load heavy modules (CodeGraph, runInstaller) to keep CLI startup fast.
@@ -63,6 +64,12 @@ const importESM = new Function('specifier', 'return import(specifier)') as
 // who patched V8 themselves or want to test a future fix.
 const nodeVersion = process.versions.node;
 const nodeMajor = parseInt(nodeVersion.split('.')[0] ?? '0', 10);
+// A project's `.nvmrc` can put an unsupported Node first on PATH while a
+// supported one is installed alongside; relaunch under it instead of refusing.
+// Only when none exists do the blocks below run.
+if ((nodeMajor >= 25 || isNodeTooOld(nodeVersion)) && !process.env.CODEGRAPH_ALLOW_UNSAFE_NODE) {
+  relaunchUnderSupportedNodeIfFound(__filename, nodeVersion);
+}
 if (nodeMajor >= 25) {
   process.stderr.write(buildNode25BlockBanner(nodeVersion) + '\n');
   if (!process.env.CODEGRAPH_ALLOW_UNSAFE_NODE) {

@@ -44,7 +44,7 @@ export const WASM_RUNTIME_FLAGS: readonly string[] = ['--liftoff-only'];
  * Env var set on the relaunched child so a detection slip can never cause an
  * infinite re-exec loop. Also lets users force-disable the relaunch.
  */
-const RELAUNCH_GUARD_ENV = 'CODEGRAPH_WASM_RELAUNCHED';
+export const RELAUNCH_GUARD_ENV = 'CODEGRAPH_WASM_RELAUNCHED';
 
 /**
  * Env var carrying the *host* PID (the relauncher's own parent) across the
