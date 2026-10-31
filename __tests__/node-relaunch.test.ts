@@ -28,6 +28,14 @@ function findOldNode(): string | undefined {
 
 const oldNode = findOldNode();
 
+function nodeVersionOf(bin: string): string {
+  return spawnSync(bin, ['-p', 'process.versions.node'], { encoding: 'utf8' }).stdout.trim();
+}
+
+const newNode = ['/opt/homebrew/bin/node', '/usr/local/bin/node']
+  .filter((bin) => fs.existsSync(bin))
+  .find((bin) => Number(nodeVersionOf(bin).split('.')[0]) >= 25);
+
 function envWithout(...names: string[]): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const name of names) delete env[name];
@@ -60,5 +68,39 @@ describe('CLI on an unsupported Node.js', () => {
     } finally {
       fs.rmSync(emptyNvm, { recursive: true, force: true });
     }
+  });
+
+  it.skipIf(!oldNode)('does not relaunch when CODEGRAPH_ALLOW_UNSAFE_NODE is set', () => {
+    const res = spawnSync(oldNode!, [BIN, '--version'], {
+      encoding: 'utf8',
+      env: {
+        ...envWithout('CODEGRAPH_NODE', 'CODEGRAPH_NODE_RELAUNCHED', 'CODEGRAPH_WASM_RELAUNCHED'),
+        CODEGRAPH_ALLOW_UNSAFE_NODE: '1',
+      },
+    });
+    expect(res.stderr).not.toContain('relaunching under');
+    expect(res.stderr).toContain('Unsupported Node.js version');
+  });
+
+  it.skipIf(!newNode)('relaunches from the Node 25+ block too', () => {
+    const res = spawnSync(newNode!, [BIN, '--version'], {
+      encoding: 'utf8',
+      env: envWithout('CODEGRAPH_ALLOW_UNSAFE_NODE', 'CODEGRAPH_NODE', 'CODEGRAPH_NODE_RELAUNCHED', 'CODEGRAPH_WASM_RELAUNCHED'),
+    });
+    expect(res.status, res.stderr).toBe(0);
+    expect(res.stdout.trim()).toBe(PKG_VERSION);
+    expect(res.stderr).toContain('relaunching under');
+  });
+});
+
+describe('CLI on a supported Node.js', () => {
+  it('runs in place without relaunching', () => {
+    const res = spawnSync(process.execPath, [BIN, '--version'], {
+      encoding: 'utf8',
+      env: envWithout('CODEGRAPH_ALLOW_UNSAFE_NODE', 'CODEGRAPH_NODE', 'CODEGRAPH_NODE_RELAUNCHED', 'CODEGRAPH_WASM_RELAUNCHED'),
+    });
+    expect(res.status, res.stderr).toBe(0);
+    expect(res.stdout.trim()).toBe(PKG_VERSION);
+    expect(res.stderr).not.toContain('relaunching under');
   });
 });
